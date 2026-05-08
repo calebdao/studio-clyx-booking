@@ -14,6 +14,12 @@ import {
   insertEventForBooking,
   isCalendarLiveForSpace,
 } from "./google-calendar";
+import {
+  CANCELLATION_CONTACT_LINE,
+  CANCELLATION_POLICY_ACKNOWLEDGEMENT,
+  CANCELLATION_POLICY_ITEMS,
+  CANCELLATION_POLICY_TITLE,
+} from "@shared/cancellation-policy";
 
 export { SPACE_CALENDAR_ENV };
 
@@ -174,6 +180,14 @@ export function buildConfirmationEmail(booking: BookingDto) {
     `Payment: Zelle to ${ZELLE_RECIPIENT}.`,
     `Reference: ${booking.id} (please include this in the Zelle memo).`,
     "",
+    CANCELLATION_POLICY_TITLE,
+    "",
+    "Bookings are confirmed upon receipt of payment and are subject to the following terms:",
+    ...CANCELLATION_POLICY_ITEMS.map((item) => `- ${item}`),
+    "",
+    CANCELLATION_POLICY_ACKNOWLEDGEMENT,
+    CANCELLATION_CONTACT_LINE,
+    "",
     `If anything looks off, reply to this email.`,
     "",
     `— Studio Clyx`,
@@ -206,6 +220,17 @@ export function buildConfirmationEmail(booking: BookingDto) {
             <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">Payment</div>
             <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Send via Zelle to <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(ZELLE_RECIPIENT)}</strong>.</p>
             <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Reference: <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(booking.id)}</strong> — please include this in the Zelle memo so we can match the payment.</p>
+          </div>
+        </td></tr>
+        <tr><td style="padding:0 28px 24px 28px;">
+          <div style="border-top:1px solid #D4D1CA;padding-top:18px;">
+            <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">Cancellation policy</div>
+            <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;color:#28251D;">Bookings are confirmed upon receipt of payment and are subject to the following terms:</p>
+            <ul style="margin:10px 0 0 18px;padding:0;font-size:13px;line-height:1.5;color:#28251D;">
+              ${CANCELLATION_POLICY_ITEMS.map((item) => `<li style="margin:0 0 6px 0;">${escapeHtml(item)}</li>`).join("")}
+            </ul>
+            <p style="margin:10px 0 0 0;font-size:13px;line-height:1.5;color:#28251D;">${escapeHtml(CANCELLATION_POLICY_ACKNOWLEDGEMENT)}</p>
+            <p style="margin:8px 0 0 0;font-size:13px;line-height:1.5;color:#28251D;"><strong>${escapeHtml(CANCELLATION_CONTACT_LINE)}</strong></p>
           </div>
         </td></tr>
         <tr><td style="padding:0 28px 28px 28px;">

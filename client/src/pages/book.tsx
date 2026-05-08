@@ -38,6 +38,12 @@ import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin } from "lucide-
 import { useBookings } from "@/lib/booking-store";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import {
+  CANCELLATION_CONTACT_LINE,
+  CANCELLATION_POLICY_ACKNOWLEDGEMENT,
+  CANCELLATION_POLICY_ITEMS,
+  CANCELLATION_POLICY_TITLE,
+} from "@shared/cancellation-policy";
 
 type Step = "details" | "select" | "review";
 
@@ -58,6 +64,7 @@ export default function BookPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [heldBooking, setHeldBooking] = useState<Booking | null>(null);
   const [copied, setCopied] = useState(false);
+  const [policyAccepted, setPolicyAccepted] = useState(false);
 
   const space = useMemo(() => SPACES.find((s) => s.id === spaceId)!, [spaceId]);
   const activity = useMemo(() => ACTIVITIES.find((a) => a.id === activityId)!, [activityId]);
@@ -74,7 +81,7 @@ export default function BookPage() {
   const guestValid = first.trim() && last.trim() && emailValid;
 
   async function handleBookNow() {
-    if (!isComplete || !selection || !guestValid || createHoldPending) return;
+    if (!isComplete || !selection || !guestValid || !policyAccepted || createHoldPending) return;
     try {
       const b = await createHoldAsync({
         spaceId,
@@ -352,11 +359,26 @@ export default function BookPage() {
               </div>
             </dl>
             <div className="p-4 border-t border-card-border space-y-2">
+              <CancellationPolicyNotice />
+
+              <label className="flex items-start gap-2.5 rounded-md border border-card-border bg-background/35 p-3 text-xs leading-relaxed cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={policyAccepted}
+                  onChange={(e) => setPolicyAccepted(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-primary"
+                  data-testid="checkbox-cancellation-policy"
+                />
+                <span>
+                  I have read and agree to the Studio Clyx cancellation policy.
+                </span>
+              </label>
+
               <Button
                 size="lg"
                 className="w-full text-sm"
                 onClick={handleBookNow}
-                disabled={!isComplete || !guestValid || createHoldPending}
+                disabled={!isComplete || !guestValid || !policyAccepted || createHoldPending}
                 data-testid="button-book-now"
               >
                 {createHoldPending ? "Placing hold…" : "Book now"}
@@ -375,6 +397,11 @@ export default function BookPage() {
               {guestValid && isChoosingEnd && (
                 <p className="text-[11px] text-primary text-center">
                   Click an end time on the calendar.
+                </p>
+              )}
+              {guestValid && selection && !policyAccepted && (
+                <p className="text-[11px] text-muted-foreground text-center">
+                  Review and accept the cancellation policy to continue.
                 </p>
               )}
             </div>
@@ -454,6 +481,8 @@ export default function BookPage() {
               the memo.
             </p>
           </div>
+
+          <CancellationPolicyNotice compact />
 
           {/* Hold timer */}
           {heldBooking?.holdExpiresAt && (
@@ -547,6 +576,36 @@ function ConfirmRow({ label, value }: { label: string; value: React.ReactNode })
     <div className="px-3.5 py-2.5 flex items-center justify-between gap-4">
       <span className="text-eyebrow">{label}</span>
       <span className="text-sm font-medium text-right">{value}</span>
+    </div>
+  );
+}
+
+function CancellationPolicyNotice({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      className={cn(
+        "rounded-md border border-card-border bg-background/45",
+        compact ? "mt-3 p-3" : "p-3"
+      )}
+      data-testid={compact ? "card-cancellation-policy-dialog" : "card-cancellation-policy"}
+    >
+      <div className="text-eyebrow text-primary mb-2">{CANCELLATION_POLICY_TITLE}</div>
+      <p className="text-xs text-muted-foreground leading-relaxed mb-2">
+        Bookings are confirmed upon receipt of payment and are subject to the following terms:
+      </p>
+      <ul className="space-y-1.5 text-[11px] text-muted-foreground leading-relaxed list-disc pl-4">
+        {CANCELLATION_POLICY_ITEMS.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11px] text-foreground leading-relaxed">
+        {CANCELLATION_POLICY_ACKNOWLEDGEMENT}
+      </p>
+      {compact && (
+        <p className="mt-2 text-[11px] text-muted-foreground leading-relaxed">
+          {CANCELLATION_CONTACT_LINE}
+        </p>
+      )}
     </div>
   );
 }

@@ -49,7 +49,8 @@ export const SPACES: Space[] = [
     id: "studio-1",
     name: "Studio 1",
     shortName: "S1",
-    description: "Cyc wall, hard infinity. Best for product, fashion, and music video.",
+    description:
+      "Minimal editorial studio with soft earth tones, refined finishes, and French doors to Studio 3 for expanded shoots.",
     swatch: "bg-[#BC7518]", // brass
     hex: "#BC7518",
   },
@@ -57,7 +58,8 @@ export const SPACES: Space[] = [
     id: "studio-2",
     name: "Studio 2",
     shortName: "S2",
-    description: "Daylight bay with blackout. Suited for natural-light editorial and interviews.",
+    description:
+      "850 sq ft luxury set with velvet textures, rich tones, mid-century pieces, drapery, and a signature wood accent wall.",
     swatch: "bg-[#3F6B6E]", // teal-grey
     hex: "#3F6B6E",
   },
@@ -65,7 +67,8 @@ export const SPACES: Space[] = [
     id: "studio-3",
     name: "Studio 3",
     shortName: "S3",
-    description: "Soundstage with tie-line and low-ceiling kit. Best for podcasts and small live sets.",
+    description:
+      "Sun-drenched lifestyle loft with marble, velvet, travertine, burl wood, and a sculptural bar for events and campaigns.",
     swatch: "bg-[#7A4A2E]", // burnt sienna
     hex: "#7A4A2E",
   },
@@ -73,7 +76,8 @@ export const SPACES: Space[] = [
     id: "lincoln-apartment",
     name: "Lincoln Apartment",
     shortName: "LA",
-    description: "Furnished location apartment. Kitchen, living room, two bedrooms.",
+    description:
+      "Curated mid-century two-bedroom apartment with living room, kitchen, natural light, blush bedroom, and artful details.",
     swatch: "bg-[#3D4A5A]", // slate
     hex: "#3D4A5A",
   },

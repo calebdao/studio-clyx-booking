@@ -88,6 +88,7 @@ export interface IStorage {
   confirmBooking(id: string): Promise<BookingDto | undefined>;
   releaseBooking(id: string): Promise<boolean>;
   expireHolds(now: number): Promise<number>;
+  purgePrototypeSeedBookings(): Promise<number>;
   seedIfEmpty(): Promise<void>;
 }
 
@@ -213,7 +214,15 @@ export class DatabaseStorage implements IStorage {
     return removed;
   }
 
+  async purgePrototypeSeedBookings(): Promise<number> {
+    const result = sqlite.prepare("DELETE FROM bookings WHERE id LIKE 'seed-%'").run();
+    return result.changes;
+  }
+
   async seedIfEmpty(): Promise<void> {
+    // Production app should start with real bookings only. Prototype seed
+    // bookings were useful for visual QA, but they block real availability.
+    return;
     const count = db.select().from(bookings).all().length;
     if (count > 0) return;
     const now = new Date();
@@ -281,5 +290,12 @@ export class DatabaseStorage implements IStorage {
 
 export const storage = new DatabaseStorage();
 
-// Seed on boot if empty (synchronous-style, fire-and-forget).
-storage.seedIfEmpty().catch((e) => console.error("seed error", e));
+// Remove prototype seed bookings on boot and never create new fake bookings.
+storage
+  .purgePrototypeSeedBookings()
+  .then((removed) => {
+    if (removed > 0) {
+      console.log(`[storage] removed ${removed} prototype seed booking(s)`);
+    }
+  })
+  .catch((e) => console.error("seed cleanup error", e));

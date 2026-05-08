@@ -6,6 +6,7 @@ import {
   integrationsStatus,
   pushBookingToCalendar,
   sendConfirmationEmail,
+  sendOwnerBookingAlert,
   startHoldExpirySweeper,
 } from "./integrations";
 import {
@@ -86,6 +87,11 @@ export async function registerRoutes(
       // sweep before checking conflicts
       await storage.expireHolds(Date.now());
       const booking = await storage.createHold(input);
+      try {
+        await sendOwnerBookingAlert(booking);
+      } catch (alertError) {
+        console.error("owner booking alert error", alertError);
+      }
       res.status(201).json(booking);
     } catch (e) {
       if (e instanceof ZodError) {

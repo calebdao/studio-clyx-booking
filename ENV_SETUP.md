@@ -25,6 +25,8 @@ ADMIN_PIN=2457
 # that gets committed. Provide it via your hosting platform's secret manager.
 RESEND_API_KEY=                       # e.g. re_xxxxxxxxxxxxxxxxxxxxxxxx (set on host)
 RESEND_FROM_ADDRESS='Studio Clyx <info@studioclyx.com>'
+# Comma-separated owner recipients for new booking hold alerts.
+OWNER_ALERT_EMAILS=calebdao@gmail.com,gladys@example.com
 
 # ---- Google Calendar (one calendar per space) ----
 # Service-account JSON, single-line. Used by the Calendar client.
@@ -79,6 +81,24 @@ The body (both HTML and plain-text alternative) includes:
 
 `buildConfirmationEmail(booking)` is exported from `server/integrations.ts` if
 you ever want to render the email outside the send path (tests, previews, etc.).
+
+### Owner booking alerts
+
+`server/integrations.ts` → `sendOwnerBookingAlert(booking)` runs immediately
+after a guest places a new hold with `POST /api/bookings`.
+
+Set:
+
+```bash
+OWNER_ALERT_EMAILS=calebdao@gmail.com,gladys@example.com
+```
+
+Use a comma-separated list with no quotes. When `RESEND_API_KEY`,
+`RESEND_FROM_ADDRESS`, and `OWNER_ALERT_EMAILS` are all configured, Studio Clyx
+owners receive an email for every new 30-minute booking hold. The alert includes
+booking ID, guest name, guest email/phone, space, activity, date, start/end,
+duration, total, and the Zelle memo/reference. If `OWNER_ALERT_EMAILS` is
+missing, the alert stays in simulation mode and the booking still succeeds.
 
 ---
 

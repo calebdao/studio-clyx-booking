@@ -101,6 +101,7 @@ const ACTIVITY_LABELS: Record<BookingDto["activityId"], { name: string; rate: nu
 const ZELLE_RECIPIENT = "calebdao@gmail.com";
 
 export function resendStatus() {
+  const ownerAlertRecipients = getOwnerAlertRecipients();
   return {
     name: "Resend",
     mode:
@@ -111,7 +112,17 @@ export function resendStatus() {
     credentialConfigured: Boolean(process.env.RESEND_API_KEY),
     fromEnv: "RESEND_FROM_ADDRESS",
     fromConfigured: Boolean(process.env.RESEND_FROM_ADDRESS),
+    ownerAlertsEnv: "OWNER_ALERT_EMAILS",
+    ownerAlertRecipientsConfigured: ownerAlertRecipients.length > 0,
+    ownerAlertRecipientCount: ownerAlertRecipients.length,
   } as const;
+}
+
+function getOwnerAlertRecipients() {
+  return (process.env.OWNER_ALERT_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim())
+    .filter(Boolean);
 }
 
 function escapeHtml(s: string) {
@@ -294,6 +305,126 @@ export async function sendConfirmationEmail(booking: BookingDto) {
     return { ok: true, mode: "live" as const, providerId: json.id ?? null };
   } catch (err) {
     console.error(`[integrations] resend send threw for ${booking.id}:`, err);
+    return {
+      ok: false,
+      mode: "live" as const,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export function buildOwnerBookingAlertEmail(booking: BookingDto) {
+  const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
+  const activity = ACTIVITY_LABELS[booking.activityId];
+  const activityLabel = activity?.name ?? booking.activityId;
+  const rate = activity?.rate ?? 0;
+  const { durationHours, dateLabel, startLabel, endLabel } =
+    formatBookingTimes(booking);
+  const total = Math.round(rate * durationHours * 100) / 100;
+  const totalLabel = `$${total.toFixed(2)}`;
+  const guestName = `${booking.guest.firstName} ${booking.guest.lastName}`.trim();
+  const phone = booking.guest.phone || "Not provided";
+  const subject = `New Studio Clyx booking hold — ${space} (${dateLabel})`;
+
+  const text = [
+    "New booking hold received.",
+    "",
+    `Booking ID:    ${booking.id}`,
+    `Guest:         ${guestName}`,
+    `Email:         ${booking.guest.email}`,
+    `Phone:         ${phone}`,
+    `Space:         ${space}`,
+    `Activity:      ${activityLabel}`,
+    `Date:          ${dateLabel}`,
+    `Start:         ${startLabel}`,
+    `End:           ${endLabel}`,
+    `Duration:      ${durationHours} hour${durationHours === 1 ? "" : "s"}`,
+    `Total:         ${totalLabel}`,
+    "",
+    `Payment expected by Zelle to ${ZELLE_RECIPIENT}.`,
+    `Ask the guest to include booking ID ${booking.id} in the Zelle memo.`,
+    "",
+    "Next step: once Zelle payment lands, open the Studio Clyx admin panel and confirm payment to send the guest confirmation email and create the Google Calendar event.",
+  ].join("\n");
+
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:#F7F6F2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#28251D;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F7F6F2;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;width:100%;background:#FBFBF9;border:1px solid #D4D1CA;border-radius:8px;">
+        <tr><td style="padding:28px;">
+          <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#01696F;font-weight:600;">Studio Clyx</div>
+          <h1 style="margin:6px 0 10px 0;font-size:22px;font-weight:600;letter-spacing:-0.01em;color:#28251D;">New booking hold received</h1>
+          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.5;color:#28251D;">A guest placed a 30-minute hold. Confirm payment in the admin panel once the Zelle payment lands.</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;line-height:1.5;">
+            ${row("Booking ID", booking.id, true)}
+            ${row("Guest", guestName)}
+            ${row("Email", booking.guest.email)}
+            ${row("Phone", phone)}
+            ${row("Space", space)}
+            ${row("Activity", activityLabel)}
+            ${row("Date", dateLabel)}
+            ${row("Start", startLabel)}
+            ${row("End", endLabel)}
+            ${row("Duration", `${durationHours} hour${durationHours === 1 ? "" : "s"}`)}
+            ${row("Total", totalLabel)}
+          </table>
+          <div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+            <p style="margin:0;font-size:14px;line-height:1.5;">Payment expected by Zelle to <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(ZELLE_RECIPIENT)}</strong>.</p>
+            <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Memo/reference: <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(booking.id)}</strong>.</p>
+          </div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+
+  return { subject, text, html };
+}
+
+export async function sendOwnerBookingAlert(booking: BookingDto) {
+  const status = resendStatus();
+  const recipients = getOwnerAlertRecipients();
+  if (status.mode === "simulation" || recipients.length === 0) {
+    const reason =
+      status.mode === "simulation"
+        ? !process.env.RESEND_API_KEY
+          ? "RESEND_API_KEY missing"
+          : "RESEND_FROM_ADDRESS missing"
+        : "OWNER_ALERT_EMAILS missing";
+    console.log(
+      `[integrations] simulation (${reason}): would send owner booking alert for ${booking.id}`
+    );
+    return { ok: true, mode: "simulation" as const, reason };
+  }
+
+  const apiKey = process.env.RESEND_API_KEY!;
+  const from = process.env.RESEND_FROM_ADDRESS!;
+  const { subject, text, html } = buildOwnerBookingAlertEmail(booking);
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from, to: recipients, subject, html, text }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(
+        `[integrations] owner alert send failed for ${booking.id}: ${res.status} ${body}`
+      );
+      return { ok: false, mode: "live" as const, status: res.status, error: body };
+    }
+    const json = (await res.json().catch(() => ({}))) as { id?: string };
+    console.log(
+      `[integrations] resend: sent owner alert for ${booking.id} to ${recipients.join(", ")} (resend id=${json.id ?? "?"})`
+    );
+    return { ok: true, mode: "live" as const, providerId: json.id ?? null };
+  } catch (err) {
+    console.error(`[integrations] owner alert send threw for ${booking.id}:`, err);
     return {
       ok: false,
       mode: "live" as const,

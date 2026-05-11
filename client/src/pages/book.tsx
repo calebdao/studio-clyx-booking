@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ACTIVITIES,
-  Activity,
   ActivityId,
+  AddOnCatalogItem,
   Booking,
-  computePrice,
+  computePriceBreakdown,
   fmtDayLong,
   fmtMoney,
   fmtTime12,
+  GUEST_MAX,
+  GUEST_MIN,
   HOLD_DURATION_MINUTES,
   MIN_DURATION_HOURS,
-  Space,
+  PriceBreakdown,
+  SelectedAddOn,
+  selectedFromCatalog,
   SpaceId,
   SPACES,
   ZELLE_RECIPIENT,
@@ -34,8 +38,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin } from "lucide-react";
-import { useBookings } from "@/lib/booking-store";
+import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin, Minus, Plus, Users, Wine, ShoppingBag } from "lucide-react";
+import { useBookings, usePublicAddOns } from "@/lib/booking-store";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -45,11 +49,10 @@ import {
   CANCELLATION_POLICY_TITLE,
 } from "@shared/cancellation-policy";
 
-type Step = "details" | "select" | "review";
-
 export default function BookPage() {
   const { bookings, createHoldAsync, createHoldPending, now } = useBookings();
   const { toast } = useToast();
+  const { data: addOnCatalog } = usePublicAddOns();
 
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
@@ -61,8 +64,14 @@ export default function BookPage() {
   const [activityId, setActivityId] = useState<ActivityId>("production");
   const [selection, setSelection] = useState<{ start: Date; end: Date } | null>(null);
 
+  const [guestCount, setGuestCount] = useState<number>(1);
+  const [alcohol, setAlcohol] = useState<boolean>(false);
+  // selected add-ons keyed by catalog id → quantity
+  const [addonQty, setAddonQty] = useState<Record<string, number>>({});
+
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [heldBooking, setHeldBooking] = useState<Booking | null>(null);
+  const [heldBreakdown, setHeldBreakdown] = useState<PriceBreakdown | null>(null);
   const [copied, setCopied] = useState(false);
   const [policyAccepted, setPolicyAccepted] = useState(false);
 
@@ -73,15 +82,47 @@ export default function BookPage() {
     ? Math.round((selection.end.getTime() - selection.start.getTime()) / (30 * 60 * 1000))
     : 0;
   const hours = slots * 0.5;
-  const price = selection ? computePrice(activity, slots) : 0;
   const isComplete = !!selection && slots > 0;
   const isChoosingEnd = !!selection && slots === 0;
 
+  const selectedAddOns = useMemo<SelectedAddOn[]>(() => {
+    if (!addOnCatalog) return [];
+    const list: SelectedAddOn[] = [];
+    for (const item of addOnCatalog) {
+      const q = addonQty[item.id] ?? 0;
+      if (q > 0) list.push(selectedFromCatalog(item, q));
+    }
+    return list;
+  }, [addOnCatalog, addonQty]);
+
+  const breakdown = useMemo<PriceBreakdown | null>(() => {
+    if (!isComplete) return null;
+    return computePriceBreakdown({
+      activity,
+      slots,
+      guestCount,
+      alcohol,
+      activityId,
+      addons: selectedAddOns,
+    });
+  }, [isComplete, activity, slots, guestCount, alcohol, activityId, selectedAddOns]);
+
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  const guestValid = first.trim() && last.trim() && emailValid;
+  const guestValid = !!(first.trim() && last.trim() && emailValid);
+  const guestCountValid = Number.isInteger(guestCount) && guestCount >= GUEST_MIN && guestCount <= GUEST_MAX;
+
+  function setAddonQuantity(item: AddOnCatalogItem, qty: number) {
+    setAddonQty((prev) => {
+      const next = { ...prev };
+      const clamped = Math.max(0, Math.min(qty, item.quantityAvailable ?? 99));
+      if (clamped === 0) delete next[item.id];
+      else next[item.id] = clamped;
+      return next;
+    });
+  }
 
   async function handleBookNow() {
-    if (!isComplete || !selection || !guestValid || !policyAccepted || createHoldPending) return;
+    if (!isComplete || !selection || !guestValid || !guestCountValid || !policyAccepted || createHoldPending) return;
     try {
       const b = await createHoldAsync({
         spaceId,
@@ -94,8 +135,12 @@ export default function BookPage() {
           email: email.trim(),
           phone: phone.trim() || undefined,
         },
+        guestCount,
+        alcohol,
+        addons: selectedAddOns.map((a) => ({ addOnId: a.addOnId, quantity: a.quantity })),
       });
       setHeldBooking(b);
+      setHeldBreakdown(breakdown);
       setConfirmOpen(true);
       setSelection(null);
     } catch (err) {
@@ -285,6 +330,210 @@ export default function BookPage() {
               onSelectionChange={setSelection}
             />
           </Section>
+
+          {/* Guest count + alcohol */}
+          <Section
+            title="Guests & details"
+            eyebrow="05"
+            note="Guest tier and an alcohol consumption fee apply."
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field
+                label="Number of guests"
+                required
+                hint={`1–${GUEST_MAX} max`}
+                error={
+                  !guestCountValid
+                    ? `Enter a number between ${GUEST_MIN} and ${GUEST_MAX}.`
+                    : undefined
+                }
+              >
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => setGuestCount((c) => Math.max(GUEST_MIN, c - 1))}
+                    disabled={guestCount <= GUEST_MIN}
+                    data-testid="button-guest-decrement"
+                    aria-label="Decrease guests"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
+                  </Button>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={GUEST_MIN}
+                    max={GUEST_MAX}
+                    value={guestCount}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value || "1", 10);
+                      if (Number.isFinite(n)) {
+                        setGuestCount(Math.max(GUEST_MIN, Math.min(GUEST_MAX, n)));
+                      }
+                    }}
+                    className="text-center font-mono w-20"
+                    data-testid="input-guest-count"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => setGuestCount((c) => Math.min(GUEST_MAX, c + 1))}
+                    disabled={guestCount >= GUEST_MAX}
+                    data-testid="button-guest-increment"
+                    aria-label="Increase guests"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </Button>
+                  <span className="ml-1 text-[11px] text-muted-foreground">
+                    {guestCount <= 15
+                      ? "no surcharge"
+                      : guestCount <= 25
+                      ? "+$10/hr"
+                      : "+$20/hr"}
+                  </span>
+                </div>
+              </Field>
+
+              <Field label="Alcohol" hint="Adds a $50 fee">
+                <label className="flex items-center gap-2.5 rounded-md border border-card-border bg-card px-3 h-9 text-sm cursor-pointer hover-elevate">
+                  <input
+                    type="checkbox"
+                    checked={alcohol}
+                    onChange={(e) => setAlcohol(e.target.checked)}
+                    className="h-4 w-4 accent-primary"
+                    data-testid="checkbox-alcohol"
+                  />
+                  <Wine className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span>Alcohol will be consumed.</span>
+                </label>
+              </Field>
+            </div>
+          </Section>
+
+          {/* Add-ons */}
+          <Section
+            title="Add-ons"
+            eyebrow="06"
+            note="Optional rentals to enhance your space."
+          >
+            {!addOnCatalog ? (
+              <div className="text-xs text-muted-foreground">Loading add-ons…</div>
+            ) : addOnCatalog.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No add-ons available right now.</div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {addOnCatalog.map((item) => {
+                  const qty = addonQty[item.id] ?? 0;
+                  const selected = qty > 0;
+                  return (
+                    <div
+                      key={item.id}
+                      data-testid={`card-addon-${item.id}`}
+                      className={cn(
+                        "flex gap-3 rounded-md border p-3 transition",
+                        selected
+                          ? "border-primary bg-primary/5"
+                          : "border-card-border bg-card"
+                      )}
+                    >
+                      {item.imageUrl ? (
+                        <img
+                          src={item.imageUrl}
+                          alt=""
+                          className="w-16 h-16 rounded-sm object-cover flex-shrink-0"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-sm bg-muted flex items-center justify-center flex-shrink-0">
+                          <ShoppingBag className="w-4 h-4 text-muted-foreground" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <div className="font-medium text-sm tracking-tight truncate">
+                            {item.name}
+                          </div>
+                          <div className="font-mono text-xs whitespace-nowrap">
+                            ${item.price.toFixed(2)}
+                            <span className="text-muted-foreground">
+                              {item.priceType === "per_item" ? "/ea" : " flat"}
+                            </span>
+                          </div>
+                        </div>
+                        {item.description && (
+                          <p className="mt-0.5 text-[11px] text-muted-foreground leading-snug line-clamp-2">
+                            {item.description}
+                          </p>
+                        )}
+                        <div className="mt-2 flex items-center gap-2">
+                          {item.priceType === "per_item" ? (
+                            <>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-7 w-7"
+                                disabled={qty <= 0}
+                                onClick={() => setAddonQuantity(item, qty - 1)}
+                                data-testid={`button-addon-decrement-${item.id}`}
+                                aria-label={`Decrease ${item.name}`}
+                              >
+                                <Minus className="w-3 h-3" />
+                              </Button>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={item.quantityAvailable ?? 99}
+                                value={qty}
+                                onChange={(e) => {
+                                  const n = parseInt(e.target.value || "0", 10);
+                                  setAddonQuantity(item, Number.isFinite(n) ? n : 0);
+                                }}
+                                className="text-center font-mono w-14 h-7 text-xs"
+                                data-testid={`input-addon-qty-${item.id}`}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-7 w-7"
+                                disabled={
+                                  item.quantityAvailable != null &&
+                                  qty >= item.quantityAvailable
+                                }
+                                onClick={() => setAddonQuantity(item, qty + 1)}
+                                data-testid={`button-addon-increment-${item.id}`}
+                                aria-label={`Increase ${item.name}`}
+                              >
+                                <Plus className="w-3 h-3" />
+                              </Button>
+                            </>
+                          ) : (
+                            <label className="flex items-center gap-2 text-xs cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={(e) =>
+                                  setAddonQuantity(item, e.target.checked ? 1 : 0)
+                                }
+                                className="h-3.5 w-3.5 accent-primary"
+                                data-testid={`checkbox-addon-${item.id}`}
+                              />
+                              <span>{selected ? "Added" : "Add"}</span>
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Section>
         </div>
 
         {/* RIGHT: sticky summary */}
@@ -310,6 +559,27 @@ export default function BookPage() {
                 value={emailValid ? email : <span className="text-muted-foreground">—</span>}
               />
               {phone && <SummaryRow icon={<Phone className="w-3.5 h-3.5" />} label="Phone" value={phone} />}
+              <SummaryRow
+                icon={<Users className="w-3.5 h-3.5" />}
+                label="Guests"
+                value={`${guestCount} ${guestCount === 1 ? "guest" : "guests"}`}
+              />
+              <SummaryRow
+                icon={<Wine className="w-3.5 h-3.5" />}
+                label="Alcohol"
+                value={alcohol ? "Yes (+$50)" : <span className="text-muted-foreground">No</span>}
+              />
+              {selectedAddOns.length > 0 && (
+                <SummaryRow
+                  icon={<ShoppingBag className="w-3.5 h-3.5" />}
+                  label="Add-ons"
+                  value={
+                    <span className="text-xs">
+                      {selectedAddOns.length} item{selectedAddOns.length === 1 ? "" : "s"}
+                    </span>
+                  }
+                />
+              )}
 
               <div className="px-5 py-4">
                 <div className="text-eyebrow mb-2">When</div>
@@ -345,17 +615,37 @@ export default function BookPage() {
               </div>
 
               <div className="px-5 py-4 bg-background/40">
+                {breakdown && breakdown.lines.length > 0 && (
+                  <div className="mb-3 space-y-1">
+                    {breakdown.lines.map((line, idx) => (
+                      <div
+                        key={`${line.label}-${idx}`}
+                        className="flex items-baseline justify-between gap-2 text-[11px]"
+                      >
+                        <div className="text-muted-foreground truncate">
+                          <span className="text-foreground">{line.label}</span>
+                          {line.detail && (
+                            <span className="ml-1.5 font-mono text-[10px]">{line.detail}</span>
+                          )}
+                        </div>
+                        <div className="font-mono tabular-nums">
+                          {fmtMoney(line.amount)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="flex items-baseline justify-between">
                   <div className="text-eyebrow">Total</div>
                   <div className="font-mono text-2xl font-semibold tabular-nums" data-testid="text-total-price">
-                    {selection ? fmtMoney(price) : "$0.00"}
+                    {breakdown ? fmtMoney(breakdown.total) : "$0.00"}
                   </div>
                 </div>
-                <div className="mt-1 text-[11px] text-muted-foreground font-mono">
-                  {selection
-                    ? `${activity.rate} × ${hours} hr`
-                    : "Pricing applies at selection"}
-                </div>
+                {!breakdown && (
+                  <div className="mt-1 text-[11px] text-muted-foreground font-mono">
+                    Pricing applies at selection
+                  </div>
+                )}
               </div>
             </dl>
             <div className="p-4 border-t border-card-border space-y-2">
@@ -378,7 +668,13 @@ export default function BookPage() {
                 size="lg"
                 className="w-full text-sm"
                 onClick={handleBookNow}
-                disabled={!isComplete || !guestValid || !policyAccepted || createHoldPending}
+                disabled={
+                  !isComplete ||
+                  !guestValid ||
+                  !guestCountValid ||
+                  !policyAccepted ||
+                  createHoldPending
+                }
                 data-testid="button-book-now"
               >
                 {createHoldPending ? "Placing hold…" : "Book now"}
@@ -410,22 +706,24 @@ export default function BookPage() {
           <div className="mt-4 px-1 text-[11px] text-muted-foreground leading-relaxed">
             Payment is collected via Zelle to{" "}
             <span className="font-mono text-foreground">{ZELLE_RECIPIENT}</span> after you reserve.
-            Slots are held for 30 minutes pending confirmation.
+            Slots are held for {HOLD_DURATION_MINUTES} minutes pending confirmation. Payment
+            confirmation typically takes approximately 10–30 minutes.
           </div>
         </aside>
       </div>
 
       {/* Confirmation dialog */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent className="sm:max-w-md" data-testid="dialog-confirm">
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" data-testid="dialog-confirm">
           <DialogHeader>
             <div className="text-eyebrow text-primary mb-1.5">Hold confirmed</div>
             <DialogTitle className="tracking-tight">
               Send payment via Zelle to lock in your booking
             </DialogTitle>
             <DialogDescription className="leading-relaxed pt-1">
-              We've placed a 30-minute hold. Studio Clyx will confirm the booking once the payment
-              arrives, and you'll receive a confirmation email.
+              We've placed a {HOLD_DURATION_MINUTES}-minute hold. Studio Clyx will confirm your booking
+              once payment arrives — payment confirmation typically takes approximately 10–30 minutes,
+              and you'll receive a confirmation email.
             </DialogDescription>
           </DialogHeader>
 
@@ -446,18 +744,49 @@ export default function BookPage() {
                 }
               />
               <ConfirmRow
+                label="Guests"
+                value={`${heldBooking.guestCount} ${heldBooking.guestCount === 1 ? "guest" : "guests"}`}
+              />
+              {heldBooking.alcohol && (
+                <ConfirmRow label="Alcohol" value="Yes (+$50)" />
+              )}
+              {heldBooking.addons.length > 0 && (
+                <ConfirmRow
+                  label="Add-ons"
+                  value={
+                    <span className="text-xs">
+                      {heldBooking.addons
+                        .map((a) =>
+                          a.priceType === "flat" ? a.name : `${a.name} × ${a.quantity}`
+                        )
+                        .join(", ")}
+                    </span>
+                  }
+                />
+              )}
+              {heldBreakdown && (
+                <div className="px-3.5 py-2.5 space-y-1">
+                  {heldBreakdown.lines.map((line, idx) => (
+                    <div
+                      key={`${line.label}-${idx}`}
+                      className="flex items-baseline justify-between gap-2 text-[11px]"
+                    >
+                      <span className="text-muted-foreground">
+                        <span className="text-foreground">{line.label}</span>
+                        {line.detail && (
+                          <span className="ml-1.5 font-mono text-[10px]">{line.detail}</span>
+                        )}
+                      </span>
+                      <span className="font-mono tabular-nums">{fmtMoney(line.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <ConfirmRow
                 label="Total"
                 value={
                   <span className="font-mono font-semibold">
-                    {fmtMoney(
-                      computePrice(
-                        ACTIVITIES.find((a) => a.id === heldBooking.activityId)!,
-                        Math.round(
-                          (new Date(heldBooking.end).getTime() - new Date(heldBooking.start).getTime()) /
-                            (30 * 60 * 1000)
-                        )
-                      )
-                    )}
+                    {fmtMoney(heldBreakdown?.total ?? 0)}
                   </span>
                 }
               />

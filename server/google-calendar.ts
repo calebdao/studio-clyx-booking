@@ -261,6 +261,199 @@ function dateOnlyToIso(date: string | undefined, end: boolean): string {
 }
 
 /**
+ * Build the JSON body Google Calendar expects for a booking event.
+ * Confirmed events are opaque; tentative holds keep status: "tentative" so the
+ * owner can see at a glance that payment hasn't landed.
+ */
+function eventBodyForBooking(
+  booking: BookingDto,
+  mode: "hold" | "confirmed"
+) {
+  const guest = `${booking.guest.firstName} ${booking.guest.lastName}`.trim();
+  const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
+  const activity = ACTIVITY_LABELS[booking.activityId] ?? booking.activityId;
+  const prefix = mode === "hold" ? "[HOLD] " : "";
+  return {
+    summary: `${prefix}${space} \u2014 ${activity} (${guest})`,
+    description: [
+      `Studio Clyx booking ${booking.id} (${mode === "hold" ? "pending payment" : "confirmed"})`,
+      ``,
+      `Guest: ${guest}`,
+      `Email: ${booking.guest.email}`,
+      booking.guest.phone ? `Phone: ${booking.guest.phone}` : null,
+      `Activity: ${activity}`,
+      `Guests: ${booking.guestCount}`,
+      booking.alcohol ? "Alcohol: yes" : null,
+      booking.addons && booking.addons.length > 0
+        ? `Add-ons: ${booking.addons
+            .map((a) =>
+              a.priceType === "flat"
+                ? `${a.name} (flat)`
+                : `${a.quantity}\u00d7 ${a.name}`
+            )
+            .join(", ")}`
+        : null,
+      `Source: ${booking.source}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    start: { dateTime: booking.start, timeZone: "America/New_York" },
+    end: { dateTime: booking.end, timeZone: "America/New_York" },
+    // Hold events stay tentative; confirmed events are opaque.
+    status: mode === "hold" ? "tentative" : "confirmed",
+    transparency: "opaque",
+    extendedProperties: {
+      private: {
+        studioClyxBookingId: booking.id,
+        studioClyxSource: booking.source ?? "internal",
+        studioClyxMode: mode,
+      },
+    },
+  } as const;
+}
+
+/**
+ * Insert a tentative hold event when a new booking enters the system.
+ * Live mode only; falls back to simulation otherwise. Returns the event id
+ * + calendar id so callers can persist them.
+ */
+export async function insertHoldEventForBooking(
+  booking: BookingDto
+): Promise<
+  | { ok: true; mode: "live"; eventId: string; calendarId: string; htmlLink?: string }
+  | { ok: false; mode: "simulation"; reason: string }
+  | { ok: false; mode: "live"; error: string }
+> {
+  if (!isCalendarLiveForSpace(booking.spaceId)) {
+    const reason = !parseServiceAccount()
+      ? "GOOGLE_SERVICE_ACCOUNT_JSON missing/invalid"
+      : `${SPACE_CALENDAR_ENV[booking.spaceId]} not set`;
+    return { ok: false, mode: "simulation", reason };
+  }
+  try {
+    const token = await getAccessToken();
+    if (!token)
+      return { ok: false, mode: "simulation", reason: "Could not obtain access token" };
+    const calendarId = calendarIdForSpace(booking.spaceId)!;
+    const url = new URL(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`
+    );
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(eventBodyForBooking(booking, "hold")),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, mode: "live", error: `insert hold ${res.status}: ${text}` };
+    }
+    const json = (await res.json()) as { id: string; htmlLink?: string };
+    return {
+      ok: true,
+      mode: "live",
+      eventId: json.id,
+      calendarId,
+      htmlLink: json.htmlLink,
+    };
+  } catch (e) {
+    return { ok: false, mode: "live", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Patch an existing Google Calendar event to mark it confirmed.
+ * Used by the confirm flow so a single event transitions from tentative
+ * (hold) to confirmed without leaving an extra event behind. If the event
+ * id is unknown (e.g. older booking placed before this code shipped), the
+ * caller should fall back to insertEventForBooking.
+ */
+export async function updateEventForBooking(
+  booking: BookingDto,
+  eventId: string,
+  calendarId: string,
+  mode: "hold" | "confirmed"
+): Promise<
+  | { ok: true; mode: "live"; eventId: string; htmlLink?: string }
+  | { ok: false; mode: "simulation"; reason: string }
+  | { ok: false; mode: "live"; error: string }
+> {
+  if (!parseServiceAccount()) {
+    return {
+      ok: false,
+      mode: "simulation",
+      reason: "GOOGLE_SERVICE_ACCOUNT_JSON missing/invalid",
+    };
+  }
+  try {
+    const token = await getAccessToken();
+    if (!token)
+      return { ok: false, mode: "simulation", reason: "Could not obtain access token" };
+    const url = new URL(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
+    );
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(eventBodyForBooking(booking, mode)),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, mode: "live", error: `patch event ${res.status}: ${text}` };
+    }
+    const json = (await res.json()) as { id: string; htmlLink?: string };
+    return { ok: true, mode: "live", eventId: json.id, htmlLink: json.htmlLink };
+  } catch (e) {
+    return { ok: false, mode: "live", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Delete a Google Calendar event by id. Used when a hold expires, is rejected,
+ * or released so the calendar matches the booking state.
+ */
+export async function deleteEvent(
+  eventId: string,
+  calendarId: string
+): Promise<
+  | { ok: true; mode: "live" }
+  | { ok: false; mode: "simulation"; reason: string }
+  | { ok: false; mode: "live"; error: string }
+> {
+  if (!parseServiceAccount()) {
+    return {
+      ok: false,
+      mode: "simulation",
+      reason: "GOOGLE_SERVICE_ACCOUNT_JSON missing/invalid",
+    };
+  }
+  try {
+    const token = await getAccessToken();
+    if (!token)
+      return { ok: false, mode: "simulation", reason: "Could not obtain access token" };
+    const url = new URL(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
+    );
+    const res = await fetch(url, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok && res.status !== 404 && res.status !== 410) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, mode: "live", error: `delete event ${res.status}: ${text}` };
+    }
+    return { ok: true, mode: "live" };
+  } catch (e) {
+    return { ok: false, mode: "live", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
  * Insert an event on the space's calendar for a confirmed booking.
  */
 export async function insertEventForBooking(
@@ -290,43 +483,13 @@ export async function insertEventForBooking(
       `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`
     );
 
-    const guest = `${booking.guest.firstName} ${booking.guest.lastName}`.trim();
-    const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
-    const activity = ACTIVITY_LABELS[booking.activityId] ?? booking.activityId;
-
-    const body = {
-      summary: `${space} — ${activity} (${guest})`,
-      description: [
-        `Studio Clyx booking ${booking.id}`,
-        ``,
-        `Guest: ${guest}`,
-        `Email: ${booking.guest.email}`,
-        booking.guest.phone ? `Phone: ${booking.guest.phone}` : null,
-        `Activity: ${activity}`,
-        `Source: ${booking.source}`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      start: { dateTime: booking.start, timeZone: "America/New_York" },
-      end: { dateTime: booking.end, timeZone: "America/New_York" },
-      // Mark as opaque so it blocks (consistent with our conflict logic).
-      transparency: "opaque",
-      // Ensure a stable mapping back to the booking ID for later updates/deletes.
-      extendedProperties: {
-        private: {
-          studioClyxBookingId: booking.id,
-          studioClyxSource: booking.source,
-        },
-      },
-    };
-
     const res = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(eventBodyForBooking(booking, "confirmed")),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");

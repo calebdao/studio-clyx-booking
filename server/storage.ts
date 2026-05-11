@@ -1,14 +1,19 @@
-import { users, bookings } from "@shared/schema";
+import { users, bookings, addOnCatalog } from "@shared/schema";
 import type {
   User,
   InsertUser,
   BookingRow,
   BookingDto,
   CreateHoldInput,
+  AddOnCatalogRow,
+  AddOnDto,
+  CreateAddOnInput,
+  UpdateAddOnInput,
+  SelectedAddOn,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import {
   isCalendarLiveForSpace,
   listEventsForSpace,
@@ -35,18 +40,58 @@ sqlite.exec(`
     guest_last_name TEXT NOT NULL,
     guest_email TEXT NOT NULL,
     guest_phone TEXT,
+    guest_count INTEGER NOT NULL DEFAULT 1,
+    alcohol INTEGER NOT NULL DEFAULT 0,
+    addons TEXT,
     hold_expires_at INTEGER,
+    hold_active INTEGER NOT NULL DEFAULT 1,
+    reminder_sent_at INTEGER,
+    google_event_id TEXT,
+    google_calendar_id TEXT,
     created_at INTEGER NOT NULL,
     source TEXT NOT NULL DEFAULT 'internal'
   );
+  CREATE TABLE IF NOT EXISTS addon_catalog (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    price REAL NOT NULL,
+    price_type TEXT NOT NULL DEFAULT 'per_item',
+    image_url TEXT,
+    quantity_available INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
 `);
+
+// ----- Idempotent ALTER TABLE for upgrade from older schema versions -----
+// SQLite ALTER TABLE … ADD COLUMN throws if the column already exists; we
+// detect via PRAGMA table_info() and add only what's missing. This keeps the
+// production data.db (already on Render) intact while picking up new fields.
+function ensureBookingColumn(name: string, ddl: string) {
+  const rows = sqlite.prepare("PRAGMA table_info(bookings)").all() as Array<{
+    name: string;
+  }>;
+  if (!rows.some((r) => r.name === name)) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN ${ddl}`);
+  }
+}
+ensureBookingColumn("guest_count", "guest_count INTEGER NOT NULL DEFAULT 1");
+ensureBookingColumn("alcohol", "alcohol INTEGER NOT NULL DEFAULT 0");
+ensureBookingColumn("addons", "addons TEXT");
+ensureBookingColumn("hold_active", "hold_active INTEGER NOT NULL DEFAULT 1");
+ensureBookingColumn("reminder_sent_at", "reminder_sent_at INTEGER");
+ensureBookingColumn("google_event_id", "google_event_id TEXT");
+ensureBookingColumn("google_calendar_id", "google_calendar_id TEXT");
 
 export const db = drizzle(sqlite);
 
 // ----- Domain helpers (mirrors client/src/lib/booking-data.ts but server-owned) -----
 
 const SLOT_MINUTES = 30;
-export const HOLD_DURATION_MINUTES = 30;
+export const HOLD_DURATION_MINUTES = 60;
+export const OWNER_REMINDER_MINUTES = 60;
 
 function addMinutes(d: Date, m: number) {
   return new Date(d.getTime() + m * 60 * 1000);
@@ -54,6 +99,16 @@ function addMinutes(d: Date, m: number) {
 function floorToSlot(d: Date) {
   const step = SLOT_MINUTES * 60 * 1000;
   return new Date(Math.floor(d.getTime() / step) * step);
+}
+
+function safeParseAddons(raw: string | null | undefined): SelectedAddOn[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as SelectedAddOn[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function rowToDto(r: BookingRow): BookingDto {
@@ -70,10 +125,40 @@ function rowToDto(r: BookingRow): BookingDto {
       email: r.guestEmail,
       phone: r.guestPhone ?? undefined,
     },
+    guestCount: r.guestCount ?? 1,
+    alcohol: Boolean(r.alcohol),
+    addons: safeParseAddons(r.addons),
     holdExpiresAt: r.holdExpiresAt ?? undefined,
+    holdActive: Boolean(r.holdActive),
+    reminderSentAt: r.reminderSentAt ?? undefined,
+    googleEventId: r.googleEventId ?? undefined,
+    googleCalendarId: r.googleCalendarId ?? undefined,
     createdAt: r.createdAt,
     source: r.source as BookingDto["source"],
   };
+}
+
+function rowToAddOnDto(r: AddOnCatalogRow): AddOnDto {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description ?? undefined,
+    price: r.price,
+    priceType: r.priceType as AddOnDto["priceType"],
+    imageUrl: r.imageUrl ?? undefined,
+    quantityAvailable: r.quantityAvailable ?? undefined,
+    active: Boolean(r.active),
+    sortOrder: r.sortOrder ?? 0,
+  };
+}
+
+// ----- Pricing helper used by addon line-total recompute -----
+function computeAddOnLineTotal(item: {
+  price: number;
+  priceType: string;
+}, qty: number): number {
+  if (item.priceType === "flat") return Math.round(item.price * 100) / 100;
+  return Math.round(item.price * qty * 100) / 100;
 }
 
 export interface IStorage {
@@ -86,10 +171,27 @@ export interface IStorage {
   getBooking(id: string): Promise<BookingDto | undefined>;
   createHold(input: CreateHoldInput): Promise<BookingDto>;
   confirmBooking(id: string): Promise<BookingDto | undefined>;
+  rejectBooking(id: string): Promise<BookingDto | undefined>;
   releaseBooking(id: string): Promise<boolean>;
-  expireHolds(now: number): Promise<number>;
+  expireHolds(now: number): Promise<{
+    expired: BookingDto[];
+  }>;
+  listOverdueReminderTargets(now: number): Promise<BookingDto[]>;
+  markReminderSent(id: string, now: number): Promise<void>;
+  setGoogleEvent(
+    id: string,
+    eventId: string | null,
+    calendarId: string | null
+  ): Promise<void>;
   purgePrototypeSeedBookings(): Promise<number>;
-  seedIfEmpty(): Promise<void>;
+  // add-on catalog
+  listAddOns(includeInactive?: boolean): Promise<AddOnDto[]>;
+  getAddOn(id: string): Promise<AddOnDto | undefined>;
+  createAddOn(input: CreateAddOnInput): Promise<AddOnDto>;
+  updateAddOn(id: string, patch: UpdateAddOnInput): Promise<AddOnDto | undefined>;
+  setAddOnActive(id: string, active: boolean): Promise<AddOnDto | undefined>;
+  deleteAddOn(id: string): Promise<boolean>;
+  seedAddOnCatalogIfEmpty(): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -122,9 +224,11 @@ export class DatabaseStorage implements IStorage {
     const existing = db.select().from(bookings).all();
     const conflict = existing.find((b) => {
       if (b.spaceId !== input.spaceId) return false;
-      if (b.status === "held" && b.holdExpiresAt && b.holdExpiresAt <= Date.now()) {
-        return false; // expired holds are not blockers
-      }
+      // Inactive holds and rejected bookings never block. Active holds,
+      // pending, and confirmed all block.
+      if (b.status === "rejected") return false;
+      if ((b.status === "held" || b.status === "pending") && !b.holdActive)
+        return false;
       const bs = new Date(b.start).getTime();
       const be = new Date(b.end).getTime();
       return bs < end && be > start;
@@ -136,7 +240,6 @@ export class DatabaseStorage implements IStorage {
     }
 
     // Google Calendar conflict check — only when configured for this space.
-    // Captures Peerspace/Giggster bookings synced into Google Calendar.
     if (isCalendarLiveForSpace(input.spaceId)) {
       const gc = await listEventsForSpace(
         input.spaceId,
@@ -157,10 +260,34 @@ export class DatabaseStorage implements IStorage {
           throw err;
         }
       } else if (gc.reason === "error") {
-        // Don't block the booking on a Google outage — log and continue.
         console.warn(
           `[storage] Google Calendar conflict check failed (allowing booking): ${gc.error}`
         );
+      }
+    }
+
+    // Resolve addon items from the live catalog (server is the source of
+    // truth for prices). Unknown / inactive items are silently dropped.
+    const resolvedAddons: SelectedAddOn[] = [];
+    if (input.addons && input.addons.length > 0) {
+      const catalog = db
+        .select()
+        .from(addOnCatalog)
+        .where(eq(addOnCatalog.active, true))
+        .all();
+      const byId = new Map(catalog.map((c) => [c.id, c]));
+      for (const a of input.addons) {
+        const item = byId.get(a.addOnId);
+        if (!item) continue;
+        const lineTotal = computeAddOnLineTotal(item, a.quantity);
+        resolvedAddons.push({
+          addOnId: item.id,
+          name: item.name,
+          price: item.price,
+          priceType: item.priceType as SelectedAddOn["priceType"],
+          quantity: a.quantity,
+          lineTotal,
+        });
       }
     }
 
@@ -172,12 +299,19 @@ export class DatabaseStorage implements IStorage {
       activityId: input.activityId,
       start: input.start,
       end: input.end,
-      status: "held",
+      status: "pending",
       guestFirstName: input.guest.firstName,
       guestLastName: input.guest.lastName,
       guestEmail: input.guest.email,
       guestPhone: input.guest.phone ?? null,
+      guestCount: input.guestCount,
+      alcohol: input.alcohol ?? false,
+      addons: JSON.stringify(resolvedAddons),
       holdExpiresAt: now + HOLD_DURATION_MINUTES * 60 * 1000,
+      holdActive: true,
+      reminderSentAt: null,
+      googleEventId: null,
+      googleCalendarId: null,
       createdAt: now,
       source: "internal",
     };
@@ -189,7 +323,22 @@ export class DatabaseStorage implements IStorage {
     const row = db.select().from(bookings).where(eq(bookings.id, id)).get();
     if (!row) return undefined;
     db.update(bookings)
-      .set({ status: "confirmed", holdExpiresAt: null })
+      .set({
+        status: "confirmed",
+        holdExpiresAt: null,
+        holdActive: false,
+      })
+      .where(eq(bookings.id, id))
+      .run();
+    const updated = db.select().from(bookings).where(eq(bookings.id, id)).get();
+    return updated ? rowToDto(updated) : undefined;
+  }
+
+  async rejectBooking(id: string) {
+    const row = db.select().from(bookings).where(eq(bookings.id, id)).get();
+    if (!row) return undefined;
+    db.update(bookings)
+      .set({ status: "rejected", holdActive: false, holdExpiresAt: null })
       .where(eq(bookings.id, id))
       .run();
     const updated = db.select().from(bookings).where(eq(bookings.id, id)).get();
@@ -201,17 +350,58 @@ export class DatabaseStorage implements IStorage {
     return result.changes > 0;
   }
 
-  async expireHolds(now: number): Promise<number> {
-    // Delete held bookings whose hold has expired.
+  async expireHolds(now: number): Promise<{ expired: BookingDto[] }> {
+    // Mark active holds whose expiry has passed as inactive. We do NOT delete
+    // the booking — it remains in the system as a pending request until an
+    // operator confirms or rejects it. It just stops blocking availability /
+    // calendar.
     const all = db.select().from(bookings).all();
-    let removed = 0;
+    const expired: BookingDto[] = [];
     for (const b of all) {
-      if (b.status === "held" && b.holdExpiresAt && b.holdExpiresAt <= now) {
-        db.delete(bookings).where(eq(bookings.id, b.id)).run();
-        removed++;
+      if (
+        (b.status === "held" || b.status === "pending") &&
+        b.holdActive &&
+        b.holdExpiresAt &&
+        b.holdExpiresAt <= now
+      ) {
+        db.update(bookings)
+          .set({ holdActive: false })
+          .where(eq(bookings.id, b.id))
+          .run();
+        expired.push(rowToDto({ ...b, holdActive: false }));
       }
     }
-    return removed;
+    return { expired };
+  }
+
+  async listOverdueReminderTargets(now: number): Promise<BookingDto[]> {
+    const all = db.select().from(bookings).all();
+    const threshold = OWNER_REMINDER_MINUTES * 60 * 1000;
+    return all
+      .filter((b) => {
+        if (b.status !== "pending" && b.status !== "held") return false;
+        if (b.reminderSentAt) return false;
+        return now - b.createdAt >= threshold;
+      })
+      .map(rowToDto);
+  }
+
+  async markReminderSent(id: string, now: number) {
+    db.update(bookings)
+      .set({ reminderSentAt: now })
+      .where(eq(bookings.id, id))
+      .run();
+  }
+
+  async setGoogleEvent(
+    id: string,
+    eventId: string | null,
+    calendarId: string | null
+  ) {
+    db.update(bookings)
+      .set({ googleEventId: eventId, googleCalendarId: calendarId })
+      .where(eq(bookings.id, id))
+      .run();
   }
 
   async purgePrototypeSeedBookings(): Promise<number> {
@@ -219,74 +409,186 @@ export class DatabaseStorage implements IStorage {
     return result.changes;
   }
 
-  async seedIfEmpty(): Promise<void> {
-    // Production app should start with real bookings only. Prototype seed
-    // bookings were useful for visual QA, but they block real availability.
-    return;
-    const count = db.select().from(bookings).all().length;
-    if (count > 0) return;
-    const now = new Date();
-    const today = floorToSlot(now);
-    const day0 = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+  // ----- Add-on catalog CRUD -----
 
-    type Seed = {
-      spaceId: BookingDto["spaceId"];
-      activityId: BookingDto["activityId"];
-      dayOffset: number;
-      startHour: number;
-      durationHours: number;
-      status: BookingDto["status"];
-      guest: BookingDto["guest"];
-      source: BookingDto["source"];
+  async listAddOns(includeInactive = false): Promise<AddOnDto[]> {
+    const rows = db
+      .select()
+      .from(addOnCatalog)
+      .all()
+      .filter((r) => (includeInactive ? true : r.active));
+    rows.sort(
+      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name)
+    );
+    return rows.map(rowToAddOnDto);
+  }
+
+  async getAddOn(id: string) {
+    const row = db
+      .select()
+      .from(addOnCatalog)
+      .where(eq(addOnCatalog.id, id))
+      .get();
+    return row ? rowToAddOnDto(row) : undefined;
+  }
+
+  async createAddOn(input: CreateAddOnInput): Promise<AddOnDto> {
+    const id = `ao-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const row: AddOnCatalogRow = {
+      id,
+      name: input.name,
+      description: input.description ?? null,
+      price: input.price,
+      priceType: input.priceType ?? "per_item",
+      imageUrl: input.imageUrl ? String(input.imageUrl) : null,
+      quantityAvailable:
+        input.quantityAvailable === undefined ||
+        input.quantityAvailable === null
+          ? null
+          : Number(input.quantityAvailable),
+      active: input.active ?? true,
+      sortOrder: 0,
+      createdAt: Date.now(),
     };
+    db.insert(addOnCatalog).values(row).run();
+    return rowToAddOnDto(row);
+  }
 
-    const seeds: Seed[] = [
-      { spaceId: "studio-1", activityId: "production", dayOffset: 0, startHour: 10, durationHours: 4, status: "confirmed", guest: { firstName: "Maya", lastName: "Okafor", email: "maya@northlightstudio.com", phone: "415-555-0182" }, source: "peerspace" },
-      { spaceId: "studio-2", activityId: "production", dayOffset: 0, startHour: 14, durationHours: 3, status: "confirmed", guest: { firstName: "Jordan", lastName: "Reyes", email: "jordan@reyesfilm.co" }, source: "giggster" },
-      { spaceId: "studio-3", activityId: "meeting", dayOffset: 0, startHour: 18, durationHours: 2, status: "confirmed", guest: { firstName: "Priya", lastName: "Shah", email: "priya@shahcollective.com", phone: "718-555-0144" }, source: "internal" },
-      { spaceId: "lincoln-apartment", activityId: "event", dayOffset: 1, startHour: 19, durationHours: 4, status: "confirmed", guest: { firstName: "Carmen", lastName: "Ali", email: "carmen.ali@example.com" }, source: "internal" },
-      { spaceId: "studio-1", activityId: "production", dayOffset: 1, startHour: 9, durationHours: 5, status: "confirmed", guest: { firstName: "Theo", lastName: "Brand", email: "theo@brandhouse.tv" }, source: "peerspace" },
-      { spaceId: "studio-2", activityId: "event", dayOffset: 2, startHour: 17, durationHours: 4, status: "confirmed", guest: { firstName: "Ines", lastName: "Larsson", email: "ines@nordicpop.se" }, source: "peerspace" },
-      { spaceId: "studio-3", activityId: "production", dayOffset: 3, startHour: 11, durationHours: 3.5, status: "confirmed", guest: { firstName: "Marcus", lastName: "Oduya", email: "marcus@oduyamusic.com" }, source: "giggster" },
-      { spaceId: "lincoln-apartment", activityId: "production", dayOffset: 3, startHour: 13, durationHours: 6, status: "confirmed", guest: { firstName: "Saoirse", lastName: "Doyle", email: "saoirse@example.com" }, source: "internal" },
-      { spaceId: "studio-1", activityId: "meeting", dayOffset: 4, startHour: 15, durationHours: 2.5, status: "confirmed", guest: { firstName: "Kenji", lastName: "Watanabe", email: "kenji@watanabearch.com" }, source: "internal" },
-      { spaceId: "studio-2", activityId: "production", dayOffset: 2, startHour: 10, durationHours: 3, status: "held", guest: { firstName: "Lila", lastName: "Bennett", email: "lila.bennett@example.com" }, source: "internal" },
-      { spaceId: "studio-3", activityId: "event", dayOffset: 5, startHour: 20, durationHours: 4, status: "pending", guest: { firstName: "Devon", lastName: "Park", email: "devon@parkstudios.io", phone: "212-555-0169" }, source: "internal" },
-      { spaceId: "lincoln-apartment", activityId: "meeting", dayOffset: 6, startHour: 14, durationHours: 2, status: "pending", guest: { firstName: "Anya", lastName: "Volkov", email: "anya.volkov@example.com" }, source: "internal" },
-      { spaceId: "studio-1", activityId: "production", dayOffset: 7, startHour: 12, durationHours: 4, status: "confirmed", guest: { firstName: "Ravi", lastName: "Iyer", email: "ravi@iyerco.com" }, source: "peerspace" },
-      { spaceId: "studio-2", activityId: "production", dayOffset: 8, startHour: 9, durationHours: 3, status: "confirmed", guest: { firstName: "Noor", lastName: "Hassan", email: "noor@hassanvisual.com" }, source: "internal" },
-      { spaceId: "studio-3", activityId: "production", dayOffset: 10, startHour: 16, durationHours: 5, status: "confirmed", guest: { firstName: "Eli", lastName: "Mendez", email: "eli@mendezsound.fm" }, source: "giggster" },
-      { spaceId: "lincoln-apartment", activityId: "event", dayOffset: 11, startHour: 18, durationHours: 6, status: "confirmed", guest: { firstName: "Tess", lastName: "Galloway", email: "tess.g@example.com" }, source: "internal" },
-      { spaceId: "studio-1", activityId: "meeting", dayOffset: 13, startHour: 11, durationHours: 2, status: "confirmed", guest: { firstName: "Aiko", lastName: "Tanaka", email: "aiko@tanakapress.jp" }, source: "internal" },
+  async updateAddOn(id: string, patch: UpdateAddOnInput) {
+    const row = db
+      .select()
+      .from(addOnCatalog)
+      .where(eq(addOnCatalog.id, id))
+      .get();
+    if (!row) return undefined;
+    const set: Partial<AddOnCatalogRow> = {};
+    if (patch.name !== undefined) set.name = patch.name;
+    if (patch.description !== undefined)
+      set.description = patch.description ?? null;
+    if (patch.price !== undefined) set.price = patch.price;
+    if (patch.priceType !== undefined) set.priceType = patch.priceType;
+    if (patch.imageUrl !== undefined)
+      set.imageUrl = patch.imageUrl ? String(patch.imageUrl) : null;
+    if (patch.quantityAvailable !== undefined)
+      set.quantityAvailable =
+        patch.quantityAvailable === null ? null : Number(patch.quantityAvailable);
+    if (patch.active !== undefined) set.active = patch.active;
+    if (Object.keys(set).length > 0) {
+      db.update(addOnCatalog).set(set).where(eq(addOnCatalog.id, id)).run();
+    }
+    const updated = db
+      .select()
+      .from(addOnCatalog)
+      .where(eq(addOnCatalog.id, id))
+      .get();
+    return updated ? rowToAddOnDto(updated) : undefined;
+  }
+
+  async setAddOnActive(id: string, active: boolean) {
+    return this.updateAddOn(id, { active });
+  }
+
+  async deleteAddOn(id: string) {
+    const result = db
+      .delete(addOnCatalog)
+      .where(eq(addOnCatalog.id, id))
+      .run();
+    return result.changes > 0;
+  }
+
+  async seedAddOnCatalogIfEmpty(): Promise<number> {
+    const count = db.select().from(addOnCatalog).all().length;
+    if (count > 0) return 0;
+    const seeds: Array<
+      Omit<AddOnCatalogRow, "id" | "createdAt" | "sortOrder"> & {
+        sortOrder?: number;
+      }
+    > = [
+      {
+        name: "10 Foldable Chairs",
+        description: "Set of ten foldable chairs.",
+        price: 45.0,
+        priceType: "per_item",
+        imageUrl:
+          "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/q5dbynn5xqpteuvmxydx",
+        quantityAvailable: null,
+        active: true,
+      },
+      {
+        name: "Cream Boucle Armchair",
+        description: "Soft boucle armchair.",
+        price: 150.0,
+        priceType: "per_item",
+        imageUrl:
+          "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/apcptls2emecnattppbg",
+        quantityAvailable: null,
+        active: true,
+      },
+      {
+        name: "Herman Miller Eames Molded Plywood DCM",
+        description: "Iconic molded plywood lounge chair.",
+        price: 150.0,
+        priceType: "per_item",
+        imageUrl:
+          "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/jul9mh7vvapt1lzfk3pz",
+        quantityAvailable: null,
+        active: true,
+      },
+      {
+        name: "Mario Botta La Quinta Chair",
+        description: "Sculptural designer accent chair.",
+        price: 200.0,
+        priceType: "per_item",
+        imageUrl:
+          "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/dxsfivlbjmhyigs0p8eh",
+        quantityAvailable: null,
+        active: true,
+      },
+      {
+        name: "Stools",
+        description: "Bar / counter stools (flat fee).",
+        price: 20.0,
+        priceType: "flat",
+        imageUrl:
+          "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/qcpcfonpxu0w7xa4nnvr",
+        quantityAvailable: null,
+        active: true,
+      },
+      {
+        name: "Courbe Green Ceramic Table Lamp with Rattan Shade",
+        description: "Accent table lamp with green ceramic base and rattan shade.",
+        price: 110.0,
+        priceType: "per_item",
+        imageUrl:
+          "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/k9bkfdbxdsf7tcage5id",
+        quantityAvailable: null,
+        active: true,
+      },
     ];
-
-    const insertOne = (s: Seed, idx: number) => {
-      const start = new Date(day0);
-      start.setDate(start.getDate() + s.dayOffset);
-      start.setHours(Math.floor(s.startHour), (s.startHour % 1) * 60, 0, 0);
-      const end = addMinutes(start, s.durationHours * 60);
-      const nowMs = Date.now();
-      const row: BookingRow = {
-        id: `seed-${s.spaceId}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
-        spaceId: s.spaceId,
-        activityId: s.activityId,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        status: s.status,
-        guestFirstName: s.guest.firstName,
-        guestLastName: s.guest.lastName,
-        guestEmail: s.guest.email,
-        guestPhone: s.guest.phone ?? null,
-        holdExpiresAt: s.status === "held" ? nowMs + 18 * 60 * 1000 : null,
-        createdAt: nowMs - 3600_000 * 24,
-        source: s.source ?? "internal",
+    let inserted = 0;
+    seeds.forEach((s, i) => {
+      const id = `ao-seed-${i}`;
+      const row: AddOnCatalogRow = {
+        id,
+        name: s.name,
+        description: s.description ?? null,
+        price: s.price,
+        priceType: s.priceType,
+        imageUrl: s.imageUrl ?? null,
+        quantityAvailable: s.quantityAvailable ?? null,
+        active: s.active,
+        sortOrder: i,
+        createdAt: Date.now(),
       };
-      db.insert(bookings).values(row).run();
-    };
-
-    seeds.forEach(insertOne);
+      db.insert(addOnCatalog).values(row).run();
+      inserted++;
+    });
+    return inserted;
   }
 }
+
+// Used by drizzle filtering — keep here even if unused locally.
+void and;
 
 export const storage = new DatabaseStorage();
 
@@ -299,3 +601,13 @@ storage
     }
   })
   .catch((e) => console.error("seed cleanup error", e));
+
+// Seed the add-on catalog with public Peerspace inventory if it's empty.
+storage
+  .seedAddOnCatalogIfEmpty()
+  .then((inserted) => {
+    if (inserted > 0) {
+      console.log(`[storage] seeded ${inserted} add-on catalog item(s)`);
+    }
+  })
+  .catch((e) => console.error("addon catalog seed error", e));

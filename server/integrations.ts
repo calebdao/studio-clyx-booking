@@ -6,13 +6,22 @@
 // writes a structured log line. The Resend integration is fully live when
 // RESEND_API_KEY + RESEND_FROM_ADDRESS are set.
 
-import type { BookingDto } from "@shared/schema";
+import type { BookingDto, SelectedAddOn } from "@shared/schema";
+import {
+  EVENT_CLEANING_FEE,
+  ALCOHOL_FEE,
+  guestSurchargeRate,
+} from "@shared/schema";
 import {
   SPACE_CALENDAR_ENV,
   parseServiceAccount,
   getServiceAccountError,
   insertEventForBooking,
+  insertHoldEventForBooking,
+  updateEventForBooking,
+  deleteEvent,
   isCalendarLiveForSpace,
+  calendarIdForSpace,
 } from "./google-calendar";
 import {
   CANCELLATION_CONTACT_LINE,
@@ -50,12 +59,75 @@ export function googleCalendarStatus() {
   } as const;
 }
 
+/**
+ * Push a tentative HOLD event to Google Calendar when a new booking is placed.
+ * The hold event blocks the slot for the duration of the hold so other channels
+ * (Peerspace, Giggster) see the time as busy too.
+ */
+export async function pushHoldToCalendar(booking: BookingDto) {
+  if (!isCalendarLiveForSpace(booking.spaceId)) {
+    console.log(
+      `[integrations] simulation: would create Google Calendar HOLD event for ${booking.id} on ${booking.spaceId}`
+    );
+    return { ok: true, mode: "simulation" as const };
+  }
+  const result = await insertHoldEventForBooking(booking);
+  if (result.ok) {
+    console.log(
+      `[integrations] google calendar: inserted HOLD event ${result.eventId} for ${booking.id} (${booking.spaceId})`
+    );
+    return {
+      ok: true,
+      mode: "live" as const,
+      eventId: result.eventId,
+      calendarId: result.calendarId,
+      htmlLink: result.htmlLink,
+    };
+  }
+  if (result.mode === "simulation") {
+    return { ok: true, mode: "simulation" as const, reason: result.reason };
+  }
+  console.error(
+    `[integrations] google calendar HOLD insert failed for ${booking.id}: ${result.error}`
+  );
+  return { ok: false, mode: "live" as const, error: result.error };
+}
+
+/**
+ * On confirm, patch the existing hold event into a confirmed event (preferred)
+ * or insert a fresh confirmed event if we don't have an id (legacy bookings).
+ */
 export async function pushBookingToCalendar(booking: BookingDto) {
   if (!isCalendarLiveForSpace(booking.spaceId)) {
     console.log(
       `[integrations] simulation: would create Google Calendar event for ${booking.id} on ${booking.spaceId}`
     );
     return { ok: true, mode: "simulation" as const };
+  }
+  // Prefer to patch the existing hold event so we don't leave a duplicate.
+  if (booking.googleEventId && booking.googleCalendarId) {
+    const patched = await updateEventForBooking(
+      booking,
+      booking.googleEventId,
+      booking.googleCalendarId,
+      "confirmed"
+    );
+    if (patched.ok) {
+      console.log(
+        `[integrations] google calendar: patched event ${patched.eventId} to confirmed for ${booking.id}`
+      );
+      return {
+        ok: true,
+        mode: "live" as const,
+        eventId: patched.eventId,
+        htmlLink: patched.htmlLink,
+      };
+    }
+    console.warn(
+      `[integrations] google calendar patch failed for ${booking.id}, falling back to fresh insert: ${
+        "error" in patched ? patched.error : patched.reason
+      }`
+    );
   }
   const result = await insertEventForBooking(booking);
   if (result.ok) {
@@ -70,9 +142,6 @@ export async function pushBookingToCalendar(booking: BookingDto) {
     };
   }
   if (result.mode === "simulation") {
-    console.log(
-      `[integrations] simulation (${result.reason}): skipped calendar event for ${booking.id}`
-    );
     return { ok: true, mode: "simulation" as const, reason: result.reason };
   }
   console.error(
@@ -80,6 +149,33 @@ export async function pushBookingToCalendar(booking: BookingDto) {
   );
   return { ok: false, mode: "live" as const, error: result.error };
 }
+
+/**
+ * Best-effort removal of a Google Calendar hold event when a booking is
+ * released, rejected, or its hold expires. Silent when no event was ever
+ * created (simulation or never-live spaces).
+ */
+export async function removeCalendarEvent(booking: BookingDto) {
+  if (!booking.googleEventId || !booking.googleCalendarId) {
+    return { ok: true, mode: "simulation" as const, reason: "no event id" };
+  }
+  const result = await deleteEvent(booking.googleEventId, booking.googleCalendarId);
+  if (result.ok) {
+    console.log(
+      `[integrations] google calendar: deleted event ${booking.googleEventId} for ${booking.id}`
+    );
+    return { ok: true, mode: "live" as const };
+  }
+  if (result.mode === "simulation") {
+    return { ok: true, mode: "simulation" as const, reason: result.reason };
+  }
+  console.error(
+    `[integrations] google calendar delete failed for ${booking.id}: ${result.error}`
+  );
+  return { ok: false, mode: "live" as const, error: result.error };
+}
+
+void calendarIdForSpace; // re-exported elsewhere; keep referenced to dodge lint
 
 // ----- Resend (transactional email) -----
 
@@ -99,9 +195,12 @@ const ACTIVITY_LABELS: Record<BookingDto["activityId"], { name: string; rate: nu
 };
 
 const ZELLE_RECIPIENT = "calebdao@gmail.com";
+const DEFAULT_OWNER_REMINDER_EMAIL = "info@calebgladys.com";
+const PAYMENT_WINDOW_LABEL = "10\u201330 minutes";
 
 export function resendStatus() {
   const ownerAlertRecipients = getOwnerAlertRecipients();
+  const reminderRecipient = getOwnerReminderRecipient();
   return {
     name: "Resend",
     mode:
@@ -115,6 +214,8 @@ export function resendStatus() {
     ownerAlertsEnv: "OWNER_ALERT_EMAILS",
     ownerAlertRecipientsConfigured: ownerAlertRecipients.length > 0,
     ownerAlertRecipientCount: ownerAlertRecipients.length,
+    ownerReminderEnv: "OWNER_REMINDER_EMAIL",
+    ownerReminderRecipient: reminderRecipient,
   } as const;
 }
 
@@ -123,6 +224,11 @@ function getOwnerAlertRecipients() {
     .split(",")
     .map((email) => email.trim())
     .filter(Boolean);
+}
+
+function getOwnerReminderRecipient(): string {
+  const raw = (process.env.OWNER_REMINDER_EMAIL ?? "").trim();
+  return raw || DEFAULT_OWNER_REMINDER_EMAIL;
 }
 
 function escapeHtml(s: string) {
@@ -162,15 +268,133 @@ function formatBookingTimes(booking: BookingDto) {
   };
 }
 
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+interface PriceLineItem {
+  label: string;
+  detail?: string;
+  amount: number;
+}
+interface PriceSummary {
+  hours: number;
+  base: number;
+  guestSurcharge: number;
+  guestSurchargeRate: number;
+  cleaningFee: number;
+  alcoholFee: number;
+  addonsTotal: number;
+  total: number;
+  lines: PriceLineItem[];
+  guestTier: string;
+}
+
+function guestTierLabelServer(count: number) {
+  if (count <= 15) return "1\u201315 guests";
+  if (count <= 25) return "16\u201325 guests";
+  return "26\u201340 guests";
+}
+
+export function computeBookingPricing(booking: BookingDto): PriceSummary {
+  const activity = ACTIVITY_LABELS[booking.activityId];
+  const baseRate = activity?.rate ?? 0;
+  const { durationHours } = formatBookingTimes(booking);
+  const surchargeRate = guestSurchargeRate(booking.guestCount ?? 1);
+  const base = round2(baseRate * durationHours);
+  const guestSurcharge = round2(surchargeRate * durationHours);
+  const cleaningFee = booking.activityId === "event" ? EVENT_CLEANING_FEE : 0;
+  const alcoholFee = booking.alcohol ? ALCOHOL_FEE : 0;
+  const addons: SelectedAddOn[] = booking.addons ?? [];
+  const addonsTotal = round2(addons.reduce((s, a) => s + (a.lineTotal ?? 0), 0));
+  const total = round2(base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal);
+
+  const lines: PriceLineItem[] = [
+    {
+      label: `${activity?.name ?? booking.activityId} rate`,
+      detail: `$${baseRate}/hr \u00d7 ${durationHours} hr`,
+      amount: base,
+    },
+  ];
+  if (surchargeRate > 0) {
+    lines.push({
+      label: `Guest surcharge (${guestTierLabelServer(booking.guestCount ?? 1)})`,
+      detail: `$${surchargeRate}/hr \u00d7 ${durationHours} hr`,
+      amount: guestSurcharge,
+    });
+  }
+  if (cleaningFee > 0) {
+    lines.push({ label: "Event cleaning fee", amount: cleaningFee });
+  }
+  if (alcoholFee > 0) {
+    lines.push({ label: "Alcohol consumption fee", amount: alcoholFee });
+  }
+  for (const a of addons) {
+    lines.push({
+      label: a.name,
+      detail:
+        a.priceType === "flat"
+          ? `flat \u00b7 $${a.price.toFixed(2)}`
+          : `${a.quantity} \u00d7 $${a.price.toFixed(2)}`,
+      amount: a.lineTotal,
+    });
+  }
+  return {
+    hours: durationHours,
+    base,
+    guestSurcharge,
+    guestSurchargeRate: surchargeRate,
+    cleaningFee,
+    alcoholFee,
+    addonsTotal,
+    total,
+    lines,
+    guestTier: guestTierLabelServer(booking.guestCount ?? 1),
+  };
+}
+
+function formatPriceLinesText(pricing: PriceSummary): string[] {
+  const out: string[] = [];
+  for (const l of pricing.lines) {
+    const detail = l.detail ? ` (${l.detail})` : "";
+    out.push(`  - ${l.label}${detail}: $${l.amount.toFixed(2)}`);
+  }
+  out.push(`  TOTAL: $${pricing.total.toFixed(2)}`);
+  return out;
+}
+
+function formatPriceLinesHtml(pricing: PriceSummary): string {
+  const rows = pricing.lines
+    .map((l) => {
+      const detail = l.detail
+        ? `<span style="color:#7A7974;font-size:12px;display:block;">${escapeHtml(
+            l.detail
+          )}</span>`
+        : "";
+      return `<tr>
+        <td style="padding:6px 0;color:#28251D;font-size:13px;">${escapeHtml(l.label)}${detail}</td>
+        <td style="padding:6px 0;color:#28251D;font-size:13px;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">$${l.amount.toFixed(2)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+    ${rows}
+    <tr><td colspan="2" style="border-top:1px solid #D4D1CA;"></td></tr>
+    <tr>
+      <td style="padding:6px 0;color:#28251D;font-weight:600;">Total</td>
+      <td style="padding:6px 0;color:#28251D;font-weight:600;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">$${pricing.total.toFixed(2)}</td>
+    </tr>
+  </table>`;
+}
+
 export function buildConfirmationEmail(booking: BookingDto) {
   const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
   const activity = ACTIVITY_LABELS[booking.activityId];
   const activityLabel = activity?.name ?? booking.activityId;
-  const rate = activity?.rate ?? 0;
   const { durationHours, dateLabel, startLabel, endLabel } =
     formatBookingTimes(booking);
-  const total = Math.round(rate * durationHours * 100) / 100;
-  const totalLabel = `$${total.toFixed(2)}`;
+  const pricing = computeBookingPricing(booking);
+  const totalLabel = `$${pricing.total.toFixed(2)}`;
   const guestName = `${booking.guest.firstName} ${booking.guest.lastName}`.trim();
   const subject = `Studio Clyx — booking confirmed (${booking.id})`;
 
@@ -186,7 +410,11 @@ export function buildConfirmationEmail(booking: BookingDto) {
     `Start:         ${startLabel}`,
     `End:           ${endLabel}`,
     `Duration:      ${durationHours} hour${durationHours === 1 ? "" : "s"}`,
-    `Total:         ${totalLabel}`,
+    `Guests:        ${booking.guestCount}`,
+    booking.alcohol ? `Alcohol:       yes ($${ALCOHOL_FEE} fee)` : `Alcohol:       no`,
+    "",
+    "Price breakdown:",
+    ...formatPriceLinesText(pricing),
     "",
     `Payment: Zelle to ${ZELLE_RECIPIENT}.`,
     `Reference: ${booking.id} (please include this in the Zelle memo).`,
@@ -203,6 +431,25 @@ export function buildConfirmationEmail(booking: BookingDto) {
     "",
     `— Studio Clyx`,
   ].join("\n");
+
+  const addonsHtml =
+    booking.addons && booking.addons.length > 0
+      ? `<tr><td colspan="2" style="padding-top:8px;color:#7A7974;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;">Add-ons</td></tr>` +
+        booking.addons
+          .map(
+            (a) =>
+              `<tr><td style="padding:2px 0;font-size:13px;">${escapeHtml(
+                a.name
+              )}<span style="color:#7A7974;"> · ${
+                a.priceType === "flat"
+                  ? "flat"
+                  : `${a.quantity} \u00d7 $${a.price.toFixed(2)}`
+              }</span></td><td style="padding:2px 0;font-size:13px;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">$${a.lineTotal.toFixed(
+                2
+              )}</td></tr>`
+          )
+          .join("")
+      : "";
 
   const html = `<!doctype html>
 <html><body style="margin:0;padding:0;background:#F7F6F2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#28251D;">
@@ -223,8 +470,17 @@ export function buildConfirmationEmail(booking: BookingDto) {
             ${row("Start", startLabel)}
             ${row("End", endLabel)}
             ${row("Duration", `${durationHours} hour${durationHours === 1 ? "" : "s"}`)}
+            ${row("Guests", String(booking.guestCount))}
+            ${row("Alcohol", booking.alcohol ? "yes" : "no")}
             ${row("Total", totalLabel)}
           </table>
+        </td></tr>
+        <tr><td style="padding:0 28px 20px 28px;">
+          <div style="border-top:1px solid #D4D1CA;padding-top:18px;">
+            <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">Price breakdown</div>
+            <div style="margin-top:8px;">${formatPriceLinesHtml(pricing)}</div>
+            ${addonsHtml ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:8px;">${addonsHtml}</table>` : ""}
+          </div>
         </td></tr>
         <tr><td style="padding:0 28px 24px 28px;">
           <div style="border-top:1px solid #D4D1CA;padding-top:18px;">
@@ -265,23 +521,28 @@ function row(label: string, value: string, mono = false) {
     </tr>`;
 }
 
-export async function sendConfirmationEmail(booking: BookingDto) {
+async function sendResendEmail(args: {
+  to: string | string[];
+  subject: string;
+  html: string;
+  text: string;
+  label: string; // for logging
+  bookingId: string;
+}) {
   const status = resendStatus();
   if (status.mode === "simulation") {
     const reason = !process.env.RESEND_API_KEY
       ? "RESEND_API_KEY missing"
       : "RESEND_FROM_ADDRESS missing";
     console.log(
-      `[integrations] simulation (${reason}): would email ${booking.guest.email} for confirmed booking ${booking.id}`
+      `[integrations] simulation (${reason}): would send ${args.label} for ${args.bookingId} to ${
+        Array.isArray(args.to) ? args.to.join(", ") : args.to
+      }`
     );
     return { ok: true, mode: "simulation" as const, reason };
   }
-
   const apiKey = process.env.RESEND_API_KEY!;
-  const from = process.env.RESEND_FROM_ADDRESS!; // expected: "Studio Clyx <info@studioclyx.com>"
-  const to = booking.guest.email;
-  const { subject, text, html } = buildConfirmationEmail(booking);
-
+  const from = process.env.RESEND_FROM_ADDRESS!;
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -289,22 +550,28 @@ export async function sendConfirmationEmail(booking: BookingDto) {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ from, to, subject, html, text }),
+      body: JSON.stringify({
+        from,
+        to: args.to,
+        subject: args.subject,
+        html: args.html,
+        text: args.text,
+      }),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       console.error(
-        `[integrations] resend send failed for ${booking.id}: ${res.status} ${body}`
+        `[integrations] resend ${args.label} failed for ${args.bookingId}: ${res.status} ${body}`
       );
       return { ok: false, mode: "live" as const, status: res.status, error: body };
     }
     const json = (await res.json().catch(() => ({}))) as { id?: string };
     console.log(
-      `[integrations] resend: sent confirmation for ${booking.id} to ${to} (resend id=${json.id ?? "?"})`
+      `[integrations] resend: sent ${args.label} for ${args.bookingId} (resend id=${json.id ?? "?"})`
     );
     return { ok: true, mode: "live" as const, providerId: json.id ?? null };
   } catch (err) {
-    console.error(`[integrations] resend send threw for ${booking.id}:`, err);
+    console.error(`[integrations] resend ${args.label} threw for ${args.bookingId}:`, err);
     return {
       ok: false,
       mode: "live" as const,
@@ -313,15 +580,26 @@ export async function sendConfirmationEmail(booking: BookingDto) {
   }
 }
 
+export async function sendConfirmationEmail(booking: BookingDto) {
+  const { subject, text, html } = buildConfirmationEmail(booking);
+  return sendResendEmail({
+    to: booking.guest.email,
+    subject,
+    text,
+    html,
+    label: "confirmation",
+    bookingId: booking.id,
+  });
+}
+
 export function buildOwnerBookingAlertEmail(booking: BookingDto) {
   const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
   const activity = ACTIVITY_LABELS[booking.activityId];
   const activityLabel = activity?.name ?? booking.activityId;
-  const rate = activity?.rate ?? 0;
   const { durationHours, dateLabel, startLabel, endLabel } =
     formatBookingTimes(booking);
-  const total = Math.round(rate * durationHours * 100) / 100;
-  const totalLabel = `$${total.toFixed(2)}`;
+  const pricing = computeBookingPricing(booking);
+  const totalLabel = `$${pricing.total.toFixed(2)}`;
   const guestName = `${booking.guest.firstName} ${booking.guest.lastName}`.trim();
   const phone = booking.guest.phone || "Not provided";
   const subject = `New Studio Clyx booking hold — ${space} (${dateLabel})`;
@@ -333,19 +611,44 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
     `Guest:         ${guestName}`,
     `Email:         ${booking.guest.email}`,
     `Phone:         ${phone}`,
+    `Guests:        ${booking.guestCount}`,
+    booking.alcohol ? `Alcohol:       yes ($${ALCOHOL_FEE} fee)` : `Alcohol:       no`,
     `Space:         ${space}`,
     `Activity:      ${activityLabel}`,
     `Date:          ${dateLabel}`,
     `Start:         ${startLabel}`,
     `End:           ${endLabel}`,
     `Duration:      ${durationHours} hour${durationHours === 1 ? "" : "s"}`,
-    `Total:         ${totalLabel}`,
+    "",
+    "Price breakdown:",
+    ...formatPriceLinesText(pricing),
     "",
     `Payment expected by Zelle to ${ZELLE_RECIPIENT}.`,
     `Ask the guest to include booking ID ${booking.id} in the Zelle memo.`,
     "",
-    "Next step: once Zelle payment lands, open the Studio Clyx admin panel and confirm payment to send the guest confirmation email and create the Google Calendar event.",
+    `Hold window: 1 hour. After that, the slot frees up and a reminder is sent to ${getOwnerReminderRecipient()} if still unpaid.`,
+    "",
+    `Total: ${totalLabel}`,
   ].join("\n");
+
+  const addonsHtml =
+    booking.addons && booking.addons.length > 0
+      ? `<tr><td colspan="2" style="padding-top:8px;color:#7A7974;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;">Add-ons</td></tr>` +
+        booking.addons
+          .map(
+            (a) =>
+              `<tr><td style="padding:2px 0;font-size:13px;">${escapeHtml(
+                a.name
+              )} <span style="color:#7A7974;">${
+                a.priceType === "flat"
+                  ? "(flat)"
+                  : `· ${a.quantity} \u00d7 $${a.price.toFixed(2)}`
+              }</span></td><td style="padding:2px 0;font-size:13px;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">$${a.lineTotal.toFixed(
+                2
+              )}</td></tr>`
+          )
+          .join("")
+      : "";
 
   const html = `<!doctype html>
 <html><body style="margin:0;padding:0;background:#F7F6F2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#28251D;">
@@ -355,12 +658,14 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
         <tr><td style="padding:28px;">
           <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#01696F;font-weight:600;">Studio Clyx</div>
           <h1 style="margin:6px 0 10px 0;font-size:22px;font-weight:600;letter-spacing:-0.01em;color:#28251D;">New booking hold received</h1>
-          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.5;color:#28251D;">A guest placed a 30-minute hold. Confirm payment in the admin panel once the Zelle payment lands.</p>
+          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.5;color:#28251D;">A guest placed a 1-hour hold. Confirm payment in the admin panel once the Zelle payment lands. Payment confirmation typically takes ${PAYMENT_WINDOW_LABEL} on the guest's side.</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;line-height:1.5;">
             ${row("Booking ID", booking.id, true)}
             ${row("Guest", guestName)}
             ${row("Email", booking.guest.email)}
             ${row("Phone", phone)}
+            ${row("Guests", String(booking.guestCount))}
+            ${row("Alcohol", booking.alcohol ? "yes" : "no")}
             ${row("Space", space)}
             ${row("Activity", activityLabel)}
             ${row("Date", dateLabel)}
@@ -369,6 +674,11 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
             ${row("Duration", `${durationHours} hour${durationHours === 1 ? "" : "s"}`)}
             ${row("Total", totalLabel)}
           </table>
+          <div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+            <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">Price breakdown</div>
+            <div style="margin-top:8px;">${formatPriceLinesHtml(pricing)}</div>
+            ${addonsHtml ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:8px;">${addonsHtml}</table>` : ""}
+          </div>
           <div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
             <p style="margin:0;font-size:14px;line-height:1.5;">Payment expected by Zelle to <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(ZELLE_RECIPIENT)}</strong>.</p>
             <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Memo/reference: <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(booking.id)}</strong>.</p>
@@ -383,73 +693,156 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
 }
 
 export async function sendOwnerBookingAlert(booking: BookingDto) {
-  const status = resendStatus();
   const recipients = getOwnerAlertRecipients();
-  if (status.mode === "simulation" || recipients.length === 0) {
-    const reason =
-      status.mode === "simulation"
-        ? !process.env.RESEND_API_KEY
-          ? "RESEND_API_KEY missing"
-          : "RESEND_FROM_ADDRESS missing"
-        : "OWNER_ALERT_EMAILS missing";
+  if (recipients.length === 0) {
     console.log(
-      `[integrations] simulation (${reason}): would send owner booking alert for ${booking.id}`
+      `[integrations] simulation (OWNER_ALERT_EMAILS missing): would send owner booking alert for ${booking.id}`
     );
-    return { ok: true, mode: "simulation" as const, reason };
+    return { ok: true, mode: "simulation" as const, reason: "OWNER_ALERT_EMAILS missing" };
   }
-
-  const apiKey = process.env.RESEND_API_KEY!;
-  const from = process.env.RESEND_FROM_ADDRESS!;
   const { subject, text, html } = buildOwnerBookingAlertEmail(booking);
-
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ from, to: recipients, subject, html, text }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.error(
-        `[integrations] owner alert send failed for ${booking.id}: ${res.status} ${body}`
-      );
-      return { ok: false, mode: "live" as const, status: res.status, error: body };
-    }
-    const json = (await res.json().catch(() => ({}))) as { id?: string };
-    console.log(
-      `[integrations] resend: sent owner alert for ${booking.id} to ${recipients.join(", ")} (resend id=${json.id ?? "?"})`
-    );
-    return { ok: true, mode: "live" as const, providerId: json.id ?? null };
-  } catch (err) {
-    console.error(`[integrations] owner alert send threw for ${booking.id}:`, err);
-    return {
-      ok: false,
-      mode: "live" as const,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
+  return sendResendEmail({
+    to: recipients,
+    subject,
+    text,
+    html,
+    label: "owner alert",
+    bookingId: booking.id,
+  });
 }
 
-// ----- Hold expiry sweeper -----
+export function buildOwnerReminderEmail(booking: BookingDto) {
+  const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
+  const activity = ACTIVITY_LABELS[booking.activityId];
+  const activityLabel = activity?.name ?? booking.activityId;
+  const { durationHours, dateLabel, startLabel, endLabel } =
+    formatBookingTimes(booking);
+  const pricing = computeBookingPricing(booking);
+  const totalLabel = `$${pricing.total.toFixed(2)}`;
+  const guestName = `${booking.guest.firstName} ${booking.guest.lastName}`.trim();
+  const phone = booking.guest.phone || "Not provided";
+  const subject = `Reminder: unconfirmed booking ${booking.id} — ${space}`;
 
-export function startHoldExpirySweeper(
-  expire: (now: number) => Promise<number>
-) {
+  const text = [
+    `Heads up — booking ${booking.id} is still pending after 1 hour.`,
+    "",
+    `The hold has expired so the slot is no longer blocked, but the request is still in the system as a pending booking. Review it in the admin console and confirm payment or reject the request.`,
+    "",
+    `Booking ID:    ${booking.id}`,
+    `Guest:         ${guestName}`,
+    `Email:         ${booking.guest.email}`,
+    `Phone:         ${phone}`,
+    `Guests:        ${booking.guestCount}`,
+    booking.alcohol ? `Alcohol:       yes` : `Alcohol:       no`,
+    `Space:         ${space}`,
+    `Activity:      ${activityLabel}`,
+    `Date:          ${dateLabel}`,
+    `Start:         ${startLabel}`,
+    `End:           ${endLabel}`,
+    `Duration:      ${durationHours} hour${durationHours === 1 ? "" : "s"}`,
+    `Total:         ${totalLabel}`,
+    "",
+    `Payment expected by Zelle to ${ZELLE_RECIPIENT}. Memo: ${booking.id}.`,
+  ].join("\n");
+
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:#F7F6F2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#28251D;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F7F6F2;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;width:100%;background:#FBFBF9;border:1px solid #D4D1CA;border-radius:8px;">
+        <tr><td style="padding:28px;">
+          <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#964219;font-weight:600;">Reminder · Studio Clyx</div>
+          <h1 style="margin:6px 0 10px 0;font-size:22px;font-weight:600;letter-spacing:-0.01em;color:#28251D;">Pending booking still unconfirmed</h1>
+          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.5;color:#28251D;">${escapeHtml(
+            `Booking ${booking.id} is still pending after the 1-hour hold window. The slot is no longer blocked, but the request remains pending until you confirm payment or reject it.`
+          )}</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;line-height:1.5;">
+            ${row("Booking ID", booking.id, true)}
+            ${row("Guest", guestName)}
+            ${row("Email", booking.guest.email)}
+            ${row("Phone", phone)}
+            ${row("Space", space)}
+            ${row("Activity", activityLabel)}
+            ${row("When", `${dateLabel} \u00b7 ${startLabel} \u2192 ${endLabel}`)}
+            ${row("Total", totalLabel)}
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+
+  return { subject, text, html };
+}
+
+export async function sendOwnerReminderEmail(booking: BookingDto) {
+  const recipient = getOwnerReminderRecipient();
+  const { subject, text, html } = buildOwnerReminderEmail(booking);
+  return sendResendEmail({
+    to: recipient,
+    subject,
+    text,
+    html,
+    label: "owner reminder",
+    bookingId: booking.id,
+  });
+}
+
+// ----- Sweeper: handles hold expiry + reminder dispatch -----
+
+export type SweeperHooks = {
+  expireHolds: (now: number) => Promise<{ expired: BookingDto[] }>;
+  listOverdueReminderTargets: (now: number) => Promise<BookingDto[]>;
+  markReminderSent: (id: string, now: number) => Promise<void>;
+  onHoldExpired?: (booking: BookingDto) => Promise<void> | void;
+};
+
+export function startHoldExpirySweeper(hooks: SweeperHooks) {
   // Run every 60s.
   const interval = setInterval(async () => {
+    const now = Date.now();
     try {
-      const removed = await expire(Date.now());
-      if (removed > 0) {
-        console.log(`[integrations] hold sweeper: released ${removed} expired hold(s)`);
+      const { expired } = await hooks.expireHolds(now);
+      if (expired.length > 0) {
+        console.log(
+          `[integrations] hold sweeper: marked ${expired.length} hold(s) inactive`
+        );
+        if (hooks.onHoldExpired) {
+          for (const b of expired) {
+            try {
+              await hooks.onHoldExpired(b);
+            } catch (e) {
+              console.error("[integrations] sweeper expired hook error", e);
+            }
+          }
+        }
       }
     } catch (e) {
       console.error("[integrations] hold sweeper error:", e);
     }
+    try {
+      const overdue = await hooks.listOverdueReminderTargets(now);
+      for (const b of overdue) {
+        try {
+          await sendOwnerReminderEmail(b);
+        } catch (e) {
+          console.error("[integrations] reminder send error", e);
+        }
+        try {
+          await hooks.markReminderSent(b.id, now);
+        } catch (e) {
+          console.error("[integrations] reminder markSent error", e);
+        }
+      }
+      if (overdue.length > 0) {
+        console.log(
+          `[integrations] reminder sweeper: dispatched ${overdue.length} owner reminder(s)`
+        );
+      }
+    } catch (e) {
+      console.error("[integrations] reminder sweeper error:", e);
+    }
   }, 60_000);
-  // unref so it doesn't block process exit (in tests/builds).
   if (typeof interval.unref === "function") interval.unref();
   return interval;
 }

@@ -5,7 +5,30 @@ export type SpaceId = "studio-1" | "studio-2" | "studio-3" | "lincoln-apartment"
 
 export type ActivityId = "production" | "meeting" | "event";
 
-export type BookingStatus = "held" | "pending" | "confirmed";
+export type BookingStatus = "held" | "pending" | "confirmed" | "rejected";
+
+export type AddOnPriceType = "per_item" | "flat";
+
+export interface AddOnCatalogItem {
+  id: string;
+  name: string;
+  description?: string | null;
+  price: number;
+  priceType: AddOnPriceType;
+  imageUrl?: string | null;
+  quantityAvailable?: number | null;
+  active: boolean;
+  sortOrder?: number;
+}
+
+export interface SelectedAddOn {
+  addOnId: string;
+  name: string;
+  price: number;
+  priceType: AddOnPriceType;
+  quantity: number;
+  lineTotal: number;
+}
 
 export interface Space {
   id: SpaceId;
@@ -37,8 +60,15 @@ export interface Booking {
     email: string;
     phone?: string;
   };
+  guestCount: number;
+  alcohol: boolean;
+  addons: SelectedAddOn[];
   // For held bookings: epoch ms when the hold expires
   holdExpiresAt?: number;
+  holdActive?: boolean;
+  reminderSentAt?: number;
+  googleEventId?: string;
+  googleCalendarId?: string;
   createdAt: number;
   // For mock booked entries that came from external platforms
   source?: "internal" | "peerspace" | "giggster" | "google";
@@ -94,7 +124,29 @@ export const SLOT_MINUTES = 30;
 export const MIN_LEAD_HOURS = 7;
 export const MIN_DURATION_HOURS = 2;
 export const BOOKING_WINDOW_MONTHS = 12;
-export const HOLD_DURATION_MINUTES = 30;
+export const HOLD_DURATION_MINUTES = 60;
+
+// Guest tier + extra fee constants — must mirror shared/schema.ts.
+export const GUEST_MIN = 1;
+export const GUEST_MAX = 40;
+export const GUEST_TIER_15_RATE = 0;
+export const GUEST_TIER_25_RATE = 10;
+export const GUEST_TIER_40_RATE = 20;
+export const EVENT_CLEANING_FEE = 75;
+export const ALCOHOL_FEE = 50;
+
+export function guestSurchargeRate(count: number): number {
+  if (count <= 15) return GUEST_TIER_15_RATE;
+  if (count <= 25) return GUEST_TIER_25_RATE;
+  if (count <= GUEST_MAX) return GUEST_TIER_40_RATE;
+  return GUEST_TIER_40_RATE;
+}
+
+export function guestTierLabel(count: number): string {
+  if (count <= 15) return "1\u201315 guests";
+  if (count <= 25) return "16\u201325 guests";
+  return "26\u201340 guests";
+}
 
 export const ZELLE_RECIPIENT = "calebdao@gmail.com";
 export const STUDIO_OWNER_EMAIL = "theriotmachinex@gmail.com";
@@ -151,6 +203,9 @@ export function buildSeedBookings(now: Date = new Date()): Booking[] {
       end: end.toISOString(),
       status,
       guest,
+      guestCount: 1,
+      alcohol: false,
+      addons: [],
       createdAt: now.getTime() - 3600_000 * 24,
       source,
       holdExpiresAt:
@@ -294,9 +349,117 @@ export function buildSeedBookings(now: Date = new Date()): Booking[] {
   ];
 }
 
-// Compute price for a given activity and number of 30-minute slots
+// Compute price for a given activity and number of 30-minute slots (legacy: hourly base only)
 export function computePrice(activity: Activity, slots: number): number {
   return activity.rate * (slots * 0.5);
+}
+
+export interface PriceLine {
+  label: string;
+  detail?: string;
+  amount: number;
+}
+
+export interface PriceBreakdown {
+  hours: number;
+  base: number;
+  guestSurcharge: number;
+  guestSurchargeRate: number;
+  cleaningFee: number;
+  alcoholFee: number;
+  addonsTotal: number;
+  total: number;
+  lines: PriceLine[];
+}
+
+export interface PriceInput {
+  activity: Activity;
+  slots: number;
+  guestCount: number;
+  alcohol: boolean;
+  activityId: ActivityId;
+  addons: SelectedAddOn[];
+}
+
+export function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+export function computeAddOnLineTotal(item: AddOnCatalogItem, quantity: number): number {
+  if (item.priceType === "flat") return round2(item.price);
+  return round2(item.price * quantity);
+}
+
+export function selectedFromCatalog(
+  item: AddOnCatalogItem,
+  quantity: number
+): SelectedAddOn {
+  return {
+    addOnId: item.id,
+    name: item.name,
+    price: item.price,
+    priceType: item.priceType,
+    quantity,
+    lineTotal: computeAddOnLineTotal(item, quantity),
+  };
+}
+
+export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
+  const { activity, slots, guestCount, alcohol, activityId, addons } = input;
+  const hours = slots * 0.5;
+  const base = round2(activity.rate * hours);
+  const surchargeRate = guestSurchargeRate(guestCount);
+  const guestSurcharge = round2(surchargeRate * hours);
+  const cleaningFee = activityId === "event" ? EVENT_CLEANING_FEE : 0;
+  const alcoholFee = alcohol ? ALCOHOL_FEE : 0;
+  const addonsTotal = round2(
+    addons.reduce((sum, a) => sum + (a.lineTotal ?? 0), 0)
+  );
+  const total = round2(
+    base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal
+  );
+
+  const lines: PriceLine[] = [
+    {
+      label: `${activity.name} rate`,
+      detail: `$${activity.rate}/hr \u00d7 ${hours} hr`,
+      amount: base,
+    },
+  ];
+  if (surchargeRate > 0) {
+    lines.push({
+      label: `Guest surcharge (${guestTierLabel(guestCount)})`,
+      detail: `$${surchargeRate}/hr \u00d7 ${hours} hr`,
+      amount: guestSurcharge,
+    });
+  }
+  if (cleaningFee > 0) {
+    lines.push({ label: "Event cleaning fee", amount: cleaningFee });
+  }
+  if (alcoholFee > 0) {
+    lines.push({ label: "Alcohol consumption fee", amount: alcoholFee });
+  }
+  for (const a of addons) {
+    lines.push({
+      label: a.name,
+      detail:
+        a.priceType === "flat"
+          ? `flat \u00b7 $${a.price.toFixed(2)}`
+          : `${a.quantity} \u00d7 $${a.price.toFixed(2)}`,
+      amount: a.lineTotal,
+    });
+  }
+  return {
+    hours,
+    base,
+    guestSurcharge,
+    guestSurchargeRate: surchargeRate,
+    cleaningFee,
+    alcoholFee,
+    addonsTotal,
+    total,
+    lines,
+  };
 }
 
 // Format a Date as a 30-min slot label, e.g. "10:00", "10:30", "00:00"

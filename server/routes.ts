@@ -1,10 +1,17 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
 import { storage } from "./storage";
-import { createHoldSchema, type BookingDto } from "@shared/schema";
+import {
+  createHoldSchema,
+  createAddOnSchema,
+  updateAddOnSchema,
+  type BookingDto,
+} from "@shared/schema";
 import {
   integrationsStatus,
   pushBookingToCalendar,
+  pushHoldToCalendar,
+  removeCalendarEvent,
   sendConfirmationEmail,
   sendOwnerBookingAlert,
   startHoldExpirySweeper,
@@ -56,7 +63,26 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   // Kick off the hold expiry sweeper so server-side state matches reality.
-  startHoldExpirySweeper((now) => storage.expireHolds(now));
+  // Also dispatches owner reminders for bookings unpaid after 1 hour.
+  startHoldExpirySweeper({
+    expireHolds: (now) => storage.expireHolds(now),
+    listOverdueReminderTargets: (now) =>
+      storage.listOverdueReminderTargets(now),
+    markReminderSent: (id, now) => storage.markReminderSent(id, now),
+    onHoldExpired: async (b) => {
+      // When a hold expires, remove the tentative Google Calendar event so the
+      // slot frees up for other channels (Peerspace/Giggster). The booking
+      // remains in the system as a pending request.
+      if (b.googleEventId && b.googleCalendarId) {
+        try {
+          await removeCalendarEvent(b);
+          await storage.setGoogleEvent(b.id, null, null);
+        } catch (e) {
+          console.error("hold-expired calendar cleanup error", e);
+        }
+      }
+    },
+  });
 
   // ----- Bookings -----
   app.get("/api/bookings", async (_req, res, next) => {
@@ -64,10 +90,6 @@ export async function registerRoutes(
       // opportunistic sweep so listings reflect current reality
       await storage.expireHolds(Date.now());
       const bookings = await storage.listBookings();
-      // Merge in Google Calendar events for each space that has the integration
-      // configured. These show up as `source: "google"` so the client can
-      // render them as occupied slots and avoid double-booking against
-      // Peerspace/Giggster syncs.
       const merged = await mergeGoogleCalendarBusy(bookings);
       res.json(merged);
     } catch (e) {
@@ -84,9 +106,26 @@ export async function registerRoutes(
         throw httpError(400, "Invalid start/end timestamps.");
       }
       validateBookingRules(start, end);
-      // sweep before checking conflicts
       await storage.expireHolds(Date.now());
       const booking = await storage.createHold(input);
+
+      // Push a tentative hold event to Google Calendar (if configured) so the
+      // slot is blocked across all channels while we wait for payment.
+      try {
+        const cal = await pushHoldToCalendar(booking);
+        if (cal.ok && cal.mode === "live" && "eventId" in cal && "calendarId" in cal) {
+          await storage.setGoogleEvent(
+            booking.id,
+            cal.eventId as string,
+            cal.calendarId as string
+          );
+          booking.googleEventId = cal.eventId as string;
+          booking.googleCalendarId = cal.calendarId as string;
+        }
+      } catch (calErr) {
+        console.error("hold calendar push error", calErr);
+      }
+
       try {
         await sendOwnerBookingAlert(booking);
       } catch (alertError) {
@@ -101,10 +140,6 @@ export async function registerRoutes(
     }
   });
 
-  // Admin actions are gated by a simple PIN header. The PIN is read from env
-  // (ADMIN_PIN) and falls back to "0000" in simulation mode so the prototype
-  // still works without secrets. The PIN is never stored client-side beyond
-  // React state — the client supplies it on each admin request.
   function requireAdmin(req: Request, _res: Response, next: NextFunction) {
     const expected = process.env.ADMIN_PIN ?? "0000";
     const provided = (req.headers["x-admin-pin"] as string | undefined) ?? "";
@@ -127,12 +162,23 @@ export async function registerRoutes(
     try {
       const booking = await storage.confirmBooking(String(req.params.id));
       if (!booking) throw httpError(404, "Booking not found.");
-      // Calendar push: await so the admin UI knows whether the event landed
-      // (live), was simulated (no creds), or failed (live error). We do NOT
-      // throw if it fails — the booking is already confirmed.
       let calendar: Awaited<ReturnType<typeof pushBookingToCalendar>>;
       try {
         calendar = await pushBookingToCalendar(booking);
+        if (
+          calendar.ok &&
+          calendar.mode === "live" &&
+          "eventId" in calendar &&
+          calendar.eventId
+        ) {
+          // Persist the (possibly new) event id so subsequent operations target the right event.
+          const calendarId = booking.googleCalendarId ?? null;
+          await storage.setGoogleEvent(
+            booking.id,
+            calendar.eventId as string,
+            calendarId
+          );
+        }
       } catch (e) {
         console.error("calendar push error", e);
         calendar = {
@@ -141,9 +187,6 @@ export async function registerRoutes(
           error: e instanceof Error ? e.message : String(e),
         };
       }
-      // Email: await the result so the admin UI can reflect real sent vs simulated.
-      // We still don't fail the confirmation if the email send fails — the booking
-      // is already locked in. We just report the outcome on the response.
       let email: Awaited<ReturnType<typeof sendConfirmationEmail>>;
       try {
         email = await sendConfirmationEmail(booking);
@@ -161,11 +204,92 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/bookings/:id/reject", requireAdmin, async (req, res, next) => {
+    try {
+      const existing = await storage.getBooking(String(req.params.id));
+      if (!existing) throw httpError(404, "Booking not found.");
+      const booking = await storage.rejectBooking(String(req.params.id));
+      if (booking?.googleEventId && booking?.googleCalendarId) {
+        try {
+          await removeCalendarEvent(booking);
+          await storage.setGoogleEvent(booking.id, null, null);
+        } catch (e) {
+          console.error("reject calendar cleanup error", e);
+        }
+      }
+      res.json({ ok: true, booking });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   app.post("/api/bookings/:id/release", requireAdmin, async (req, res, next) => {
     try {
+      const existing = await storage.getBooking(String(req.params.id));
+      if (existing?.googleEventId && existing?.googleCalendarId) {
+        try {
+          await removeCalendarEvent(existing);
+        } catch (e) {
+          console.error("release calendar cleanup error", e);
+        }
+      }
       const ok = await storage.releaseBooking(String(req.params.id));
       if (!ok) throw httpError(404, "Booking not found.");
       res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ----- Add-on catalog -----
+  app.get("/api/addons", async (_req, res, next) => {
+    try {
+      // Public endpoint: only active items.
+      const list = await storage.listAddOns(false);
+      res.json(list);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get("/api/admin/addons", requireAdmin, async (_req, res, next) => {
+    try {
+      const list = await storage.listAddOns(true);
+      res.json(list);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post("/api/admin/addons", requireAdmin, async (req, res, next) => {
+    try {
+      const input = createAddOnSchema.parse(req.body);
+      const created = await storage.createAddOn(input);
+      res.status(201).json(created);
+    } catch (e) {
+      if (e instanceof ZodError) return next(httpError(400, fromZodError(e).toString()));
+      next(e);
+    }
+  });
+
+  app.patch("/api/admin/addons/:id", requireAdmin, async (req, res, next) => {
+    try {
+      const patch = updateAddOnSchema.parse(req.body);
+      const updated = await storage.updateAddOn(String(req.params.id), patch);
+      if (!updated) throw httpError(404, "Add-on not found.");
+      res.json(updated);
+    } catch (e) {
+      if (e instanceof ZodError) return next(httpError(400, fromZodError(e).toString()));
+      next(e);
+    }
+  });
+
+  app.delete("/api/admin/addons/:id", requireAdmin, async (req, res, next) => {
+    try {
+      // Soft-deactivate by default so historical bookings preserve item names.
+      const updated = await storage.setAddOnActive(String(req.params.id), false);
+      if (!updated) throw httpError(404, "Add-on not found.");
+      res.json({ ok: true, addOn: updated });
     } catch (e) {
       next(e);
     }
@@ -181,36 +305,36 @@ export async function registerRoutes(
 
 // Pull a 60-day window of busy events from each live space calendar and
 // represent them as synthetic confirmed bookings so the client scheduler
-// blocks those slots. Skips spaces that aren't live; degrades silently on
-// error to avoid breaking the listing.
+// blocks those slots.
 async function mergeGoogleCalendarBusy(
   internal: BookingDto[]
 ): Promise<BookingDto[]> {
   const spaceIds = Object.keys(SPACE_CALENDAR_ENV) as BookingDto["spaceId"][];
   const now = new Date();
-  const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 1 day back
-  const windowEnd = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000); // 60 days ahead
+  const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const windowEnd = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
 
-  // Collect existing booking IDs that are linked to google events to avoid
-  // double-counting (we tagged inserted events with studioClyxBookingId, but
-  // we don't strictly need to dedupe since the synthetic booking ID is the
-  // google event ID, not the internal booking ID).
+  // Don't double-render our own hold/confirmed Google events: skip any event
+  // whose id matches a known internal booking's googleEventId.
+  const ownedEventIds = new Set(
+    internal
+      .map((b) => b.googleEventId)
+      .filter((x): x is string => Boolean(x))
+  );
+
   const merged: BookingDto[] = [...internal];
   await Promise.all(
     spaceIds
       .filter(isCalendarLiveForSpace)
       .map(async (spaceId) => {
-        const result = await listEventsForSpace(
-          spaceId,
-          windowStart,
-          windowEnd
-        );
+        const result = await listEventsForSpace(spaceId, windowStart, windowEnd);
         if (!result.ok) return;
         for (const ev of result.events) {
+          if (ownedEventIds.has(ev.id)) continue;
           merged.push({
             id: `gcal-${ev.id}`,
             spaceId,
-            activityId: "production", // unknown — pick a reasonable default
+            activityId: "production",
             start: ev.start,
             end: ev.end,
             status: "confirmed",
@@ -219,6 +343,9 @@ async function mergeGoogleCalendarBusy(
               lastName: "booking",
               email: "calendar@google",
             },
+            guestCount: 1,
+            alcohol: false,
+            addons: [],
             createdAt: Date.now(),
             source: "google",
           });

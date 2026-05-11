@@ -27,6 +27,9 @@ RESEND_API_KEY=                       # e.g. re_xxxxxxxxxxxxxxxxxxxxxxxx (set on
 RESEND_FROM_ADDRESS='Studio Clyx <info@studioclyx.com>'
 # Comma-separated owner recipients for new booking hold alerts.
 OWNER_ALERT_EMAILS=calebdao@gmail.com,gladys@example.com
+# Single recipient for the "hold still pending after 1 hour" reminder.
+# Defaults to info@calebgladys.com when unset.
+OWNER_REMINDER_EMAIL=info@calebgladys.com
 
 # ---- Google Calendar (one calendar per space) ----
 # Service-account JSON, single-line. Used by the Calendar client.
@@ -95,10 +98,27 @@ OWNER_ALERT_EMAILS=calebdao@gmail.com,gladys@example.com
 
 Use a comma-separated list with no quotes. When `RESEND_API_KEY`,
 `RESEND_FROM_ADDRESS`, and `OWNER_ALERT_EMAILS` are all configured, Studio Clyx
-owners receive an email for every new 30-minute booking hold. The alert includes
+owners receive an email for every new 1-hour booking hold. The alert includes
 booking ID, guest name, guest email/phone, space, activity, date, start/end,
-duration, total, and the Zelle memo/reference. If `OWNER_ALERT_EMAILS` is
-missing, the alert stays in simulation mode and the booking still succeeds.
+duration, guest count, alcohol flag, selected add-ons, full price breakdown
+(base + guest surcharge + event cleaning fee + alcohol fee + add-ons), and the
+Zelle memo/reference. If `OWNER_ALERT_EMAILS` is missing, the alert stays in
+simulation mode and the booking still succeeds.
+
+### Owner reminder for stale holds
+
+`server/integrations.ts` → `sendOwnerReminderEmail(booking)` is dispatched by the
+background sweeper when a hold has been pending for at least one hour without
+being confirmed or rejected. The reminder is sent **once per booking**, tracked
+via the `reminder_sent_at` column. Configure the recipient with:
+
+```bash
+OWNER_REMINDER_EMAIL=info@calebgladys.com
+```
+
+When unset, the server uses `info@calebgladys.com` as the default. The reminder
+includes the same booking details as the alert, plus a note that the calendar
+hold has been released so the slot is free again.
 
 ---
 
@@ -257,7 +277,8 @@ NODE_ENV=production node dist/index.cjs
 
 1. Verify the `studioclyx.com` domain in the Resend dashboard so the From
    address can send.
-2. Set `RESEND_API_KEY` and `RESEND_FROM_ADDRESS` on the host.
+2. Set `RESEND_API_KEY`, `RESEND_FROM_ADDRESS`, `OWNER_ALERT_EMAILS`, and
+   `OWNER_REMINDER_EMAIL` on the host.
 3. Create the Google service account, share the four calendars with its
    `client_email`, and enable the Calendar API on the project.
 4. Set `GOOGLE_SERVICE_ACCOUNT_JSON` plus the four `GOOGLE_CALENDAR_ID_*`
@@ -268,3 +289,92 @@ NODE_ENV=production node dist/index.cjs
    a real Resend email and write a Google Calendar event to the right
    space's calendar; new hold attempts will conflict-check against existing
    events on that calendar (including Peerspace/Giggster syncs).
+
+---
+
+## Holds, pricing, and the add-on catalog
+
+This section documents behavior changes introduced with the guest-count /
+alcohol / add-on update.
+
+### Hold lifecycle
+
+- Holds last **60 minutes** (was 30). The constant lives at
+  `HOLD_DURATION_MINUTES` in both `shared/schema.ts`-adjacent code and the
+  client.
+- On `POST /api/bookings` the server: validates payload → conflict-checks →
+  inserts a Drizzle row with `status: "pending"`, `holdActive: true`, and
+  `holdExpiresAt: now + 60min` → pushes a **tentative** event to the space's
+  Google Calendar (summary prefixed with `[HOLD]`) → stores the resulting
+  `googleEventId` + `googleCalendarId` so the same event can be patched on
+  confirm or deleted on reject/release/expiry.
+- After 60 minutes, the hold-expiry sweeper marks `holdActive: false` (status
+  stays `"pending"` so the request stays visible in the admin console) and
+  removes the Google Calendar hold so the slot is free again. Pending requests
+  with `holdActive: false` no longer block new bookings.
+- The sweeper additionally sends a one-time reminder to `OWNER_REMINDER_EMAIL`
+  for any booking that has been pending for an hour without being confirmed or
+  rejected, and stamps `reminder_sent_at` so the reminder isn't repeated.
+
+### Admin actions
+
+- `POST /api/bookings/:id/release` — admin/system-initiated removal of a hold.
+  Deletes the Google Calendar event and removes the booking row.
+- `POST /api/bookings/:id/reject` — admin marks a booking as rejected. Sets
+  `status: "rejected"`, `holdActive: false`, and deletes the Google Calendar
+  event. The booking row is retained for audit.
+- `POST /api/bookings/:id/confirm` — admin marks a booking paid. Patches the
+  Google Calendar event to `status: "confirmed"` and a clean summary, then
+  sends the guest confirmation email.
+
+### Pricing model
+
+All calculations are mirrored in `client/src/lib/booking-data.ts` and
+`shared/schema.ts` (constants only).
+
+- **Base rate** — `production` $60/hr, `meeting` $80/hr, `event` $80/hr.
+- **Guest surcharge** — charged per hour:
+  - 1–15 guests: $0/hr
+  - 16–25 guests: $10/hr
+  - 26–40 guests: $20/hr
+  - Hard cap at 40; min 1.
+- **Event cleaning fee** — `$75` flat, applied automatically when activity is
+  `event`.
+- **Alcohol consumption fee** — `$50` flat when the guest checks the alcohol
+  box.
+- **Add-ons** — priced per the catalog. `per_item` items multiply price ×
+  quantity; `flat` items charge once regardless of "quantity". The server is
+  the source of truth: clients send `{ addOnId, quantity }` only; the server
+  looks up the catalog, recomputes the line total, and stores the resolved
+  `SelectedAddOn[]` on the booking.
+
+The full breakdown (line-by-line) is shown to the guest on the booking page,
+in the confirmation dialog, in the guest confirmation email, in the owner
+alert email, and in the admin console.
+
+### Add-on catalog
+
+Defined in the new `addon_catalog` SQLite table (`shared/schema.ts`).
+
+- `id, name, description?, price, priceType (per_item|flat), imageUrl?,`
+  `quantityAvailable? (nullable), active, sortOrder, createdAt`.
+- On first server start the table is seeded with six Peerspace items (10
+  Foldable Chairs, Cream Boucle Armchair, Eames Molded Plywood DCM, Mario
+  Botta La Quinta Chair, Stools, Courbe Green Ceramic Table Lamp). The seed
+  only runs when the table is empty, so existing catalogs survive.
+- Public endpoint `GET /api/addons` returns only active items.
+- Admin endpoints (PIN-gated via `x-admin-pin`): `GET /api/admin/addons`,
+  `POST /api/admin/addons`, `PATCH /api/admin/addons/:id`,
+  `DELETE /api/admin/addons/:id`. Delete is **soft** — it sets
+  `active: false` so historical bookings keep their displayed item names.
+- The admin console exposes the catalog under a new **Add-ons** tab with a
+  compact list and a create/edit dialog. Image URL, description, quantity,
+  and active flag are all editable.
+
+### Migration on existing databases
+
+`server/storage.ts` runs an idempotent `PRAGMA table_info` →
+`ALTER TABLE bookings ADD COLUMN …` migration on startup for every new column
+(`guest_count`, `alcohol`, `addons`, `hold_active`, `reminder_sent_at`,
+`google_event_id`, `google_calendar_id`). The Render production `data.db` is
+upgraded in place — no drizzle-kit migration is needed and no data is lost.

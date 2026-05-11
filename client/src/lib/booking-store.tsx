@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
-import { Booking, SpaceId } from "./booking-data";
+import { AddOnCatalogItem, Booking, SpaceId } from "./booking-data";
 
 // ----- Booking data context (server-backed) -----
 
@@ -30,12 +30,25 @@ type BookingCtx = {
   refetch: () => void;
   now: Date; // ticks every 30s for hold expiry display
   createHoldAsync: (
-    input: Omit<Booking, "id" | "status" | "createdAt" | "holdExpiresAt" | "source">
+    input: CreateHoldClientInput
   ) => Promise<Booking>;
   confirmPaymentAsync: (id: string) => Promise<ConfirmResult>;
   releaseHoldAsync: (id: string) => Promise<void>;
+  rejectBookingAsync: (id: string) => Promise<void>;
   createHoldPending: boolean;
   mutationPendingId: string | null;
+};
+
+// Input shape sent to POST /api/bookings (server resolves add-on line totals).
+export type CreateHoldClientInput = {
+  spaceId: Booking["spaceId"];
+  activityId: Booking["activityId"];
+  start: string;
+  end: string;
+  guest: Booking["guest"];
+  guestCount: number;
+  alcohol: boolean;
+  addons: { addOnId: string; quantity: number }[];
 };
 
 const BookingContext = createContext<BookingCtx | null>(null);
@@ -63,9 +76,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
   const [mutationPendingId, setMutationPendingId] = useState<string | null>(null);
 
   const createHoldMutation = useMutation({
-    mutationFn: async (
-      input: Omit<Booking, "id" | "status" | "createdAt" | "holdExpiresAt" | "source">
-    ) => {
+    mutationFn: async (input: CreateHoldClientInput) => {
       const res = await apiRequest("POST", "/api/bookings", input);
       return (await res.json()) as Booking;
     },
@@ -104,6 +115,19 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     },
   });
 
+  const rejectMutation = useMutation({
+    mutationFn: async (id: string) => {
+      setMutationPendingId(id);
+      await apiRequest("POST", `/api/bookings/${id}/reject`, undefined, {
+        headers: { "x-admin-pin": adminPin ?? "" },
+      });
+    },
+    onSettled: () => {
+      setMutationPendingId(null);
+      queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY });
+    },
+  });
+
   const value = useMemo<BookingCtx>(
     () => ({
       bookings: query.data ?? [],
@@ -118,6 +142,9 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       releaseHoldAsync: async (id) => {
         await releaseMutation.mutateAsync(id);
       },
+      rejectBookingAsync: async (id) => {
+        await rejectMutation.mutateAsync(id);
+      },
       createHoldPending: createHoldMutation.isPending,
       mutationPendingId,
     }),
@@ -129,6 +156,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       createHoldMutation,
       confirmMutation,
       releaseMutation,
+      rejectMutation,
       mutationPendingId,
     ]
   );
@@ -196,4 +224,85 @@ export function useAdmin() {
   const ctx = useContext(AdminContext);
   if (!ctx) throw new Error("useAdmin must be used within AdminProvider");
   return ctx;
+}
+
+// ----- Add-on catalog hooks -----
+
+const PUBLIC_ADDONS_KEY = ["/api/addons"] as const;
+const ADMIN_ADDONS_KEY = ["/api/admin/addons"] as const;
+
+export function usePublicAddOns() {
+  return useQuery<AddOnCatalogItem[]>({
+    queryKey: PUBLIC_ADDONS_KEY,
+    staleTime: 60_000,
+  });
+}
+
+export function useAdminAddOns() {
+  const { adminPin } = useAdmin();
+  return useQuery<AddOnCatalogItem[]>({
+    queryKey: ADMIN_ADDONS_KEY,
+    enabled: !!adminPin,
+    staleTime: 15_000,
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/addons", undefined, {
+        headers: { "x-admin-pin": adminPin ?? "" },
+      });
+      return (await res.json()) as AddOnCatalogItem[];
+    },
+  });
+}
+
+export type CreateAddOnFields = {
+  name: string;
+  description?: string | null;
+  price: number;
+  priceType: "per_item" | "flat";
+  imageUrl?: string | null;
+  quantityAvailable?: number | null;
+  active?: boolean;
+};
+
+export function useAddOnMutations() {
+  const { adminPin } = useAdmin();
+  const headers = { "x-admin-pin": adminPin ?? "" };
+
+  const create = useMutation({
+    mutationFn: async (input: CreateAddOnFields) => {
+      const res = await apiRequest("POST", "/api/admin/addons", input, { headers });
+      return (await res.json()) as AddOnCatalogItem;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ADMIN_ADDONS_KEY });
+      queryClient.invalidateQueries({ queryKey: PUBLIC_ADDONS_KEY });
+    },
+  });
+
+  const update = useMutation({
+    mutationFn: async (args: { id: string; patch: Partial<CreateAddOnFields> }) => {
+      const res = await apiRequest(
+        "PATCH",
+        `/api/admin/addons/${args.id}`,
+        args.patch,
+        { headers }
+      );
+      return (await res.json()) as AddOnCatalogItem;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ADMIN_ADDONS_KEY });
+      queryClient.invalidateQueries({ queryKey: PUBLIC_ADDONS_KEY });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/admin/addons/${id}`, undefined, { headers });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ADMIN_ADDONS_KEY });
+      queryClient.invalidateQueries({ queryKey: PUBLIC_ADDONS_KEY });
+    },
+  });
+
+  return { create, update, remove };
 }

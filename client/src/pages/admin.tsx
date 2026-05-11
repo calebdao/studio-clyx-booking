@@ -1,11 +1,10 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ACTIVITIES,
+  AddOnCatalogItem,
   Booking,
-  computePrice,
+  computePriceBreakdown,
   fmtDay,
-  fmtDayLong,
   fmtMoney,
   fmtTime12,
   SPACES,
@@ -13,8 +12,15 @@ import {
   activityById,
   STUDIO_OWNER_EMAIL,
 } from "@/lib/booking-data";
-import { useAdmin, useBookings } from "@/lib/booking-store";
+import {
+  CreateAddOnFields,
+  useAdmin,
+  useAdminAddOns,
+  useAddOnMutations,
+  useBookings,
+} from "@/lib/booking-store";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -27,6 +33,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   CheckCircle2,
   Mail,
   Clock,
@@ -35,9 +48,18 @@ import {
   AlertTriangle,
   ExternalLink,
   ShieldCheck,
+  ShieldX,
   KeyRound,
   Activity as ActivityIcon,
   Loader2,
+  Plus,
+  Trash2,
+  Power,
+  PowerOff,
+  Users,
+  Wine,
+  ShoppingBag,
+  ImageOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -80,13 +102,14 @@ function AdminConsole() {
     bookings,
     confirmPaymentAsync,
     releaseHoldAsync,
+    rejectBookingAsync,
     now,
-    isLoading,
     mutationPendingId,
   } = useBookings();
   const { lock } = useAdmin();
   const { toast } = useToast();
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [rejectId, setRejectId] = useState<string | null>(null);
   const [emailToast, setEmailToast] = useState<{
     email: string;
     mode: "live" | "simulation";
@@ -145,6 +168,27 @@ function AdminConsole() {
     }
   }
 
+  async function doReject() {
+    if (!rejectId) return;
+    try {
+      await rejectBookingAsync(rejectId);
+      setRejectId(null);
+      toast({
+        title: "Booking rejected",
+        description: "Hold removed and calendar slot released.",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not reject booking.";
+      toast({
+        title: "Could not reject booking",
+        description: msg.replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    }
+  }
+
+  const rejectTarget = rejectId ? bookings.find((b) => b.id === rejectId) : null;
+
   return (
     <div className="max-w-[1280px] mx-auto px-5 lg:px-8 py-8 lg:py-12">
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
@@ -191,6 +235,9 @@ function AdminConsole() {
           <TabsTrigger value="calendar" data-testid="tab-calendar">
             Calendar
           </TabsTrigger>
+          <TabsTrigger value="addons" data-testid="tab-addons">
+            Add-ons
+          </TabsTrigger>
         </TabsList>
 
         {/* PENDING */}
@@ -219,6 +266,16 @@ function AdminConsole() {
                     <Button
                       size="sm"
                       variant="outline"
+                      onClick={() => setRejectId(b.id)}
+                      disabled={mutationPendingId === b.id}
+                      data-testid={`button-reject-${b.id}`}
+                    >
+                      <ShieldX className="w-3.5 h-3.5 mr-1.5" />
+                      Reject
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={() => doRelease(b.id)}
                       disabled={mutationPendingId === b.id}
                       data-testid={`button-release-${b.id}`}
@@ -262,6 +319,11 @@ function AdminConsole() {
         <TabsContent value="calendar">
           <CalendarPreview bookings={bookings} />
         </TabsContent>
+
+        {/* ADD-ONS MANAGER */}
+        <TabsContent value="addons">
+          <AddOnsManager />
+        </TabsContent>
       </Tabs>
 
       {/* Confirm dialog */}
@@ -275,38 +337,76 @@ function AdminConsole() {
               guest. In production, it would also write the event to the corresponding Google Calendar.
             </DialogDescription>
           </DialogHeader>
-          {target && (
-            <div className="mt-2 rounded-md border border-card-border bg-background/40 divide-y divide-card-border text-sm">
-              <Row label="Guest" value={`${target.guest.firstName} ${target.guest.lastName}`} />
-              <Row label="Email" value={target.guest.email} />
-              <Row label="Space" value={spaceById(target.spaceId).name} />
-              <Row
-                label="When"
-                value={
-                  <span className="font-mono text-xs tabular-nums">
-                    {fmtTime12(new Date(target.start))} → {fmtTime12(new Date(target.end))} ·{" "}
-                    {fmtDay(new Date(target.start))}
-                  </span>
-                }
-              />
-              <Row
-                label="Total"
-                value={
-                  <span className="font-mono font-semibold">
-                    {fmtMoney(
-                      computePrice(
-                        activityById(target.activityId),
-                        Math.round(
-                          (new Date(target.end).getTime() - new Date(target.start).getTime()) /
-                            (30 * 60 * 1000)
-                        )
-                      )
-                    )}
-                  </span>
-                }
-              />
-            </div>
-          )}
+          {target && (() => {
+            const slots = Math.round(
+              (new Date(target.end).getTime() - new Date(target.start).getTime()) /
+                (30 * 60 * 1000)
+            );
+            const breakdown = computePriceBreakdown({
+              activity: activityById(target.activityId),
+              slots,
+              guestCount: target.guestCount,
+              alcohol: target.alcohol,
+              activityId: target.activityId,
+              addons: target.addons,
+            });
+            return (
+              <div className="mt-2 rounded-md border border-card-border bg-background/40 divide-y divide-card-border text-sm">
+                <Row label="Guest" value={`${target.guest.firstName} ${target.guest.lastName}`} />
+                <Row label="Email" value={target.guest.email} />
+                <Row label="Space" value={spaceById(target.spaceId).name} />
+                <Row
+                  label="When"
+                  value={
+                    <span className="font-mono text-xs tabular-nums">
+                      {fmtTime12(new Date(target.start))} → {fmtTime12(new Date(target.end))} ·{" "}
+                      {fmtDay(new Date(target.start))}
+                    </span>
+                  }
+                />
+                <Row label="Guests" value={`${target.guestCount}`} />
+                {target.alcohol && <Row label="Alcohol" value="Yes (+$50)" />}
+                {target.addons.length > 0 && (
+                  <Row
+                    label="Add-ons"
+                    value={
+                      <span className="text-xs">
+                        {target.addons
+                          .map((a) =>
+                            a.priceType === "flat" ? a.name : `${a.name} × ${a.quantity}`
+                          )
+                          .join(", ")}
+                      </span>
+                    }
+                  />
+                )}
+                <div className="px-3.5 py-2.5 space-y-1">
+                  {breakdown.lines.map((line, idx) => (
+                    <div
+                      key={`${line.label}-${idx}`}
+                      className="flex items-baseline justify-between gap-2 text-[11px]"
+                    >
+                      <span className="text-muted-foreground">
+                        <span className="text-foreground">{line.label}</span>
+                        {line.detail && (
+                          <span className="ml-1.5 font-mono text-[10px]">{line.detail}</span>
+                        )}
+                      </span>
+                      <span className="font-mono tabular-nums">{fmtMoney(line.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+                <Row
+                  label="Total"
+                  value={
+                    <span className="font-mono font-semibold">
+                      {fmtMoney(breakdown.total)}
+                    </span>
+                  }
+                />
+              </div>
+            );
+          })()}
           <DialogFooter className="mt-3">
             <Button variant="outline" onClick={() => setConfirmId(null)} data-testid="button-cancel-confirm">
               Cancel
@@ -322,6 +422,54 @@ function AdminConsole() {
                 <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
               )}
               Confirm & email guest
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject dialog */}
+      <Dialog open={!!rejectId} onOpenChange={(o) => !o && setRejectId(null)}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-reject-booking">
+          <DialogHeader>
+            <div className="text-eyebrow text-destructive mb-1.5">Reject booking</div>
+            <DialogTitle className="tracking-tight">Reject this hold?</DialogTitle>
+            <DialogDescription className="leading-relaxed">
+              This marks the booking as rejected, removes the Google Calendar hold, and frees the
+              slot. The guest is not auto-notified — follow up out-of-band if needed.
+            </DialogDescription>
+          </DialogHeader>
+          {rejectTarget && (
+            <div className="mt-2 rounded-md border border-card-border bg-background/40 divide-y divide-card-border text-sm">
+              <Row label="Guest" value={`${rejectTarget.guest.firstName} ${rejectTarget.guest.lastName}`} />
+              <Row label="Email" value={rejectTarget.guest.email} />
+              <Row label="Space" value={spaceById(rejectTarget.spaceId).name} />
+              <Row
+                label="When"
+                value={
+                  <span className="font-mono text-xs tabular-nums">
+                    {fmtTime12(new Date(rejectTarget.start))} →{" "}
+                    {fmtTime12(new Date(rejectTarget.end))} · {fmtDay(new Date(rejectTarget.start))}
+                  </span>
+                }
+              />
+            </div>
+          )}
+          <DialogFooter className="mt-3">
+            <Button variant="outline" onClick={() => setRejectId(null)} data-testid="button-cancel-reject">
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={doReject}
+              disabled={!!rejectTarget && mutationPendingId === rejectTarget.id}
+              data-testid="button-confirm-reject"
+            >
+              {rejectTarget && mutationPendingId === rejectTarget.id ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <ShieldX className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Reject booking
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -419,15 +567,24 @@ function BookingRow({
   const start = new Date(booking.start);
   const end = new Date(booking.end);
   const slots = Math.round((end.getTime() - start.getTime()) / (30 * 60 * 1000));
-  const price = computePrice(activity, slots);
+  const breakdown = computePriceBreakdown({
+    activity,
+    slots,
+    guestCount: booking.guestCount,
+    alcohol: booking.alcohol,
+    activityId: booking.activityId,
+    addons: booking.addons,
+  });
 
   const isHeld = booking.status === "held";
   const isPending = booking.status === "pending";
+  const holdActive = booking.holdActive !== false; // default true if missing
   const remainingMs = booking.holdExpiresAt ? Math.max(0, booking.holdExpiresAt - now.getTime()) : 0;
   const remainingMin = Math.floor(remainingMs / 60000);
   const remainingSec = Math.floor((remainingMs % 60000) / 1000);
 
-  const isExpiringSoon = isHeld && remainingMs > 0 && remainingMs < 5 * 60 * 1000;
+  const isExpiringSoon = (isHeld || isPending) && holdActive && remainingMs > 0 && remainingMs < 5 * 60 * 1000;
+  const isHoldExpired = (isHeld || isPending) && !holdActive;
 
   return (
     <div
@@ -462,9 +619,30 @@ function BookingRow({
         </span>
         <span className="text-muted-foreground">{fmtDay(start)}</span>
         <span className="font-mono tabular-nums text-muted-foreground">
-          {slots * 0.5} hr · {fmtMoney(price)}
+          {slots * 0.5} hr · {fmtMoney(breakdown.total)}
         </span>
-        {isHeld && (
+        <span className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
+          <Users className="w-3 h-3" />
+          {booking.guestCount}
+        </span>
+        {booking.alcohol && (
+          <span className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
+            <Wine className="w-3 h-3" />
+            alcohol
+          </span>
+        )}
+        {booking.addons.length > 0 && (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground"
+            title={booking.addons
+              .map((a) => (a.priceType === "flat" ? a.name : `${a.name} × ${a.quantity}`))
+              .join(", ")}
+          >
+            <ShoppingBag className="w-3 h-3" />
+            {booking.addons.length} add-on{booking.addons.length === 1 ? "" : "s"}
+          </span>
+        )}
+        {(isHeld || isPending) && holdActive && (
           <span
             className={cn(
               "inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 font-mono text-[11px] border",
@@ -476,7 +654,13 @@ function BookingRow({
             <Clock className="w-3 h-3" />
             {remainingMs > 0
               ? `${String(remainingMin).padStart(2, "0")}:${String(remainingSec).padStart(2, "0")} hold`
-              : "expired"}
+              : "expiring"}
+          </span>
+        )}
+        {isHoldExpired && (
+          <span className="inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 font-mono text-[11px] border border-muted-foreground/30 bg-muted/40 text-muted-foreground">
+            <AlertTriangle className="w-3 h-3" />
+            hold expired
           </span>
         )}
         {isPending && (
@@ -645,6 +829,351 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
       <span className="text-eyebrow">{label}</span>
       <span className="text-sm font-medium text-right">{value}</span>
     </div>
+  );
+}
+
+// ----- Add-ons manager -----
+
+function AddOnsManager() {
+  const { data: addons, isLoading } = useAdminAddOns();
+  const { create, update, remove } = useAddOnMutations();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState<AddOnCatalogItem | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  async function handleToggleActive(item: AddOnCatalogItem) {
+    try {
+      await update.mutateAsync({ id: item.id, patch: { active: !item.active } });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not update add-on.";
+      toast({ title: "Could not update add-on", description: msg.replace(/^\d+:\s*/, ""), variant: "destructive" });
+    }
+  }
+
+  async function handleDelete(item: AddOnCatalogItem) {
+    if (!confirm(`Deactivate "${item.name}"? Guests will no longer see it.`)) return;
+    try {
+      await remove.mutateAsync(item.id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not deactivate add-on.";
+      toast({ title: "Could not deactivate", description: msg.replace(/^\d+:\s*/, ""), variant: "destructive" });
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium tracking-tight">Add-on catalog</div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Manage the rentals guests can attach to a booking. Deactivating an item hides it without
+            losing the price record on past bookings.
+          </p>
+        </div>
+        <Button size="sm" onClick={() => setCreating(true)} data-testid="button-create-addon">
+          <Plus className="w-3.5 h-3.5 mr-1.5" />
+          New add-on
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="rounded-md border border-card-border bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+          Loading add-ons…
+        </div>
+      ) : !addons || addons.length === 0 ? (
+        <EmptyState
+          title="No add-ons yet"
+          detail="Create your first add-on. Guests will see it on the booking page."
+        />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {addons.map((item) => (
+            <div
+              key={item.id}
+              data-testid={`row-admin-addon-${item.id}`}
+              className={cn(
+                "flex gap-3 rounded-md border p-3",
+                item.active ? "border-card-border bg-card" : "border-card-border/50 bg-background/40"
+              )}
+            >
+              {item.imageUrl ? (
+                <img
+                  src={item.imageUrl}
+                  alt=""
+                  className={cn(
+                    "w-16 h-16 rounded-sm object-cover flex-shrink-0",
+                    !item.active && "opacity-50"
+                  )}
+                  loading="lazy"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-sm bg-muted flex items-center justify-center flex-shrink-0">
+                  <ImageOff className="w-4 h-4 text-muted-foreground" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="font-medium text-sm tracking-tight truncate">{item.name}</div>
+                  <div className="font-mono text-xs whitespace-nowrap">
+                    ${item.price.toFixed(2)}
+                    <span className="text-muted-foreground">
+                      {item.priceType === "per_item" ? "/ea" : " flat"}
+                    </span>
+                  </div>
+                </div>
+                {item.description && (
+                  <p className="mt-0.5 text-[11px] text-muted-foreground leading-snug line-clamp-2">
+                    {item.description}
+                  </p>
+                )}
+                <div className="mt-1 flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
+                  {item.quantityAvailable != null && <span>qty {item.quantityAvailable}</span>}
+                  <span
+                    className={cn(
+                      "px-1.5 py-0.5 rounded-sm border",
+                      item.active
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-muted-foreground/30 bg-muted/40 text-muted-foreground"
+                    )}
+                  >
+                    {item.active ? "active" : "inactive"}
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px]"
+                    onClick={() => setEditing(item)}
+                    data-testid={`button-edit-addon-${item.id}`}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-[11px]"
+                    onClick={() => handleToggleActive(item)}
+                    data-testid={`button-toggle-addon-${item.id}`}
+                  >
+                    {item.active ? (
+                      <PowerOff className="w-3 h-3 mr-1" />
+                    ) : (
+                      <Power className="w-3 h-3 mr-1" />
+                    )}
+                    {item.active ? "Deactivate" : "Activate"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-[11px] text-destructive hover:text-destructive"
+                    onClick={() => handleDelete(item)}
+                    data-testid={`button-delete-addon-${item.id}`}
+                  >
+                    <Trash2 className="w-3 h-3 mr-1" />
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(creating || editing) && (
+        <AddOnEditor
+          item={editing}
+          onClose={() => {
+            setCreating(false);
+            setEditing(null);
+          }}
+          onSubmit={async (values) => {
+            try {
+              if (editing) {
+                await update.mutateAsync({ id: editing.id, patch: values });
+              } else {
+                await create.mutateAsync(values);
+              }
+              setCreating(false);
+              setEditing(null);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : "Could not save add-on.";
+              toast({ title: "Could not save", description: msg.replace(/^\d+:\s*/, ""), variant: "destructive" });
+            }
+          }}
+          isSaving={create.isPending || update.isPending}
+        />
+      )}
+    </div>
+  );
+}
+
+function AddOnEditor({
+  item,
+  onClose,
+  onSubmit,
+  isSaving,
+}: {
+  item: AddOnCatalogItem | null;
+  onClose: () => void;
+  onSubmit: (values: CreateAddOnFields) => Promise<void>;
+  isSaving: boolean;
+}) {
+  const [name, setName] = useState(item?.name ?? "");
+  const [description, setDescription] = useState(item?.description ?? "");
+  const [price, setPrice] = useState<string>(item ? String(item.price) : "");
+  const [priceType, setPriceType] = useState<"per_item" | "flat">(item?.priceType ?? "per_item");
+  const [imageUrl, setImageUrl] = useState(item?.imageUrl ?? "");
+  const [quantityAvailable, setQuantityAvailable] = useState<string>(
+    item?.quantityAvailable != null ? String(item.quantityAvailable) : ""
+  );
+  const [active, setActive] = useState(item?.active ?? true);
+
+  const priceNum = parseFloat(price);
+  const qtyNum = quantityAvailable.trim() === "" ? null : parseInt(quantityAvailable, 10);
+  const isValid = name.trim().length > 0 && Number.isFinite(priceNum) && priceNum >= 0;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!isValid) return;
+    await onSubmit({
+      name: name.trim(),
+      description: description.trim() || null,
+      price: priceNum,
+      priceType,
+      imageUrl: imageUrl.trim() || null,
+      quantityAvailable: qtyNum,
+      active,
+    });
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md" data-testid="dialog-addon-editor">
+        <DialogHeader>
+          <div className="text-eyebrow text-primary mb-1.5">
+            {item ? "Edit add-on" : "New add-on"}
+          </div>
+          <DialogTitle className="tracking-tight">
+            {item ? item.name : "Create a new add-on"}
+          </DialogTitle>
+          <DialogDescription className="leading-relaxed">
+            Add-ons appear on the booking page. Pricing applies on top of the hourly room rate.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-3" data-testid="form-addon-editor">
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. 10 Foldable Chairs"
+              data-testid="input-addon-name"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Price (USD)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="45"
+                className="font-mono"
+                data-testid="input-addon-price"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Pricing</Label>
+              <Select value={priceType} onValueChange={(v) => setPriceType(v as "per_item" | "flat")}>
+                <SelectTrigger data-testid="select-addon-price-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="per_item">Per item</SelectItem>
+                  <SelectItem value="flat">Flat fee</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">
+                Quantity available <span className="text-muted-foreground text-[10px]">optional</span>
+              </Label>
+              <Input
+                type="number"
+                min="0"
+                value={quantityAvailable}
+                onChange={(e) => setQuantityAvailable(e.target.value)}
+                placeholder="unlimited"
+                className="font-mono"
+                data-testid="input-addon-quantity"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Status</Label>
+              <label className="flex items-center gap-2 rounded-md border border-card-border bg-card px-3 h-9 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={active}
+                  onChange={(e) => setActive(e.target.checked)}
+                  className="h-4 w-4 accent-primary"
+                  data-testid="checkbox-addon-active"
+                />
+                <span>{active ? "Active" : "Inactive"}</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">
+              Image URL <span className="text-muted-foreground text-[10px]">optional</span>
+            </Label>
+            <Input
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              placeholder="https://..."
+              className="font-mono text-xs"
+              data-testid="input-addon-image-url"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">
+              Description <span className="text-muted-foreground text-[10px]">optional</span>
+            </Label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Short note shown to guests…"
+              rows={2}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              data-testid="textarea-addon-description"
+            />
+          </div>
+
+          <DialogFooter className="mt-1">
+            <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-addon">
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!isValid || isSaving} data-testid="button-save-addon">
+              {isSaving ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              {item ? "Save changes" : "Create add-on"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

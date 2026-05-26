@@ -7,6 +7,8 @@ export type ActivityId = "production" | "meeting" | "event";
 
 export type BookingStatus = "held" | "pending" | "confirmed" | "rejected";
 
+export type PaymentMethod = "zelle" | "card";
+
 export type AddOnPriceType = "per_item" | "flat";
 
 export interface AddOnCatalogItem {
@@ -69,6 +71,10 @@ export interface Booking {
   reminderSentAt?: number;
   googleEventId?: string;
   googleCalendarId?: string;
+  paymentMethod?: PaymentMethod;
+  cardFeeAmount?: number;
+  paidAt?: number;
+  stripePaymentIntentId?: string;
   createdAt: number;
   // For mock booked entries that came from external platforms
   source?: "internal" | "peerspace" | "giggster" | "google";
@@ -134,6 +140,18 @@ export const GUEST_TIER_25_RATE = 10;
 export const GUEST_TIER_40_RATE = 20;
 export const EVENT_CLEANING_FEE = 75;
 export const ALCOHOL_FEE = 50;
+
+// Stripe card-fee constants. Kept in sync with shared/schema.ts. Used for the
+// live preview the customer sees when they pick "credit card". Server is still
+// authoritative — the amount charged to Stripe is recomputed server-side.
+export const STRIPE_FEE_PERCENT = 0.029;
+export const STRIPE_FEE_FIXED = 0.3;
+
+export function computeCardSurcharge(baseTotal: number): number {
+  if (!Number.isFinite(baseTotal) || baseTotal <= 0) return 0;
+  const gross = (baseTotal + STRIPE_FEE_FIXED) / (1 - STRIPE_FEE_PERCENT);
+  return Math.round((gross - baseTotal) * 100) / 100;
+}
 
 export function guestSurchargeRate(count: number): number {
   if (count <= 15) return GUEST_TIER_15_RATE;
@@ -368,7 +386,9 @@ export interface PriceBreakdown {
   cleaningFee: number;
   alcoholFee: number;
   addonsTotal: number;
-  total: number;
+  cardFee: number;
+  subtotal: number; // total without card fee (what merchant nets)
+  total: number; // what the customer owes (includes card fee if applicable)
   lines: PriceLine[];
 }
 
@@ -379,6 +399,7 @@ export interface PriceInput {
   alcohol: boolean;
   activityId: ActivityId;
   addons: SelectedAddOn[];
+  paymentMethod?: PaymentMethod;
 }
 
 export function round2(n: number): number {
@@ -405,7 +426,7 @@ export function selectedFromCatalog(
 }
 
 export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
-  const { activity, slots, guestCount, alcohol, activityId, addons } = input;
+  const { activity, slots, guestCount, alcohol, activityId, addons, paymentMethod } = input;
   const hours = slots * 0.5;
   const base = round2(activity.rate * hours);
   const surchargeRate = guestSurchargeRate(guestCount);
@@ -415,9 +436,11 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
   const addonsTotal = round2(
     addons.reduce((sum, a) => sum + (a.lineTotal ?? 0), 0)
   );
-  const total = round2(
+  const subtotal = round2(
     base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal
   );
+  const cardFee = paymentMethod === "card" ? computeCardSurcharge(subtotal) : 0;
+  const total = round2(subtotal + cardFee);
 
   const lines: PriceLine[] = [
     {
@@ -449,6 +472,13 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
       amount: a.lineTotal,
     });
   }
+  if (cardFee > 0) {
+    lines.push({
+      label: "Card processing fee",
+      detail: "2.9% + $0.30 (Stripe, passed through)",
+      amount: cardFee,
+    });
+  }
   return {
     hours,
     base,
@@ -457,6 +487,8 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
     cleaningFee,
     alcoholFee,
     addonsTotal,
+    cardFee,
+    subtotal,
     total,
     lines,
   };

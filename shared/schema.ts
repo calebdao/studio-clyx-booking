@@ -38,6 +38,10 @@ export const bookings = sqliteTable("bookings", {
   reminderSentAt: integer("reminder_sent_at"), // epoch ms when owner reminder was sent
   googleEventId: text("google_event_id"), // tentative or confirmed event id (last known)
   googleCalendarId: text("google_calendar_id"), // calendar the event lives on
+  paymentMethod: text("payment_method").notNull().default("zelle"), // zelle | card
+  cardFeeAmount: real("card_fee_amount").notNull().default(0), // Stripe surcharge passed to customer
+  paidAt: integer("paid_at"), // epoch ms when payment cleared (Stripe webhook only; Zelle stays null)
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
   createdAt: integer("created_at").notNull(),
   source: text("source").notNull().default("internal"), // internal | peerspace | giggster | google
 });
@@ -108,6 +112,20 @@ export const GUEST_TIER_40_RATE = 20; // 26–40 guests, $/hr
 export const EVENT_CLEANING_FEE = 75;
 export const ALCOHOL_FEE = 50;
 
+// Stripe domestic-card fees (US): 2.9% + $0.30 per successful charge.
+// We gross up so the customer absorbs the fee and the merchant nets the
+// original booking total. Formula: gross = (base + 0.30) / (1 - 0.029).
+// surcharge = gross - base. Numbers are kept here as a single source of
+// truth so client preview and server-authoritative math always agree.
+export const STRIPE_FEE_PERCENT = 0.029;
+export const STRIPE_FEE_FIXED = 0.3;
+
+export function computeCardSurcharge(baseTotal: number): number {
+  if (!Number.isFinite(baseTotal) || baseTotal <= 0) return 0;
+  const gross = (baseTotal + STRIPE_FEE_FIXED) / (1 - STRIPE_FEE_PERCENT);
+  return Math.round((gross - baseTotal) * 100) / 100;
+}
+
 export function guestSurchargeRate(count: number): number {
   if (count <= 15) return GUEST_TIER_15_RATE;
   if (count <= 25) return GUEST_TIER_25_RATE;
@@ -137,6 +155,10 @@ export const bookingDtoSchema = z.object({
   reminderSentAt: z.number().optional(),
   googleEventId: z.string().optional(),
   googleCalendarId: z.string().optional(),
+  paymentMethod: z.enum(["zelle", "card"]).default("zelle"),
+  cardFeeAmount: z.number().default(0),
+  paidAt: z.number().optional(),
+  stripePaymentIntentId: z.string().optional(),
   createdAt: z.number(),
   source: z.enum(["internal", "peerspace", "giggster", "google"]).optional(),
 });
@@ -164,5 +186,6 @@ export const createHoldSchema = z.object({
       })
     )
     .default([]),
+  paymentMethod: z.enum(["zelle", "card"]).default("zelle"),
 });
 export type CreateHoldInput = z.infer<typeof createHoldSchema>;

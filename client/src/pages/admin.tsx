@@ -349,6 +349,7 @@ function AdminConsole() {
               alcohol: target.alcohol,
               activityId: target.activityId,
               addons: target.addons,
+              paymentMethod: target.paymentMethod,
             });
             return (
               <div className="mt-2 rounded-md border border-card-border bg-background/40 divide-y divide-card-border text-sm">
@@ -362,6 +363,16 @@ function AdminConsole() {
                       {fmtTime12(new Date(target.start))} → {fmtTime12(new Date(target.end))} ·{" "}
                       {fmtDay(new Date(target.start))}
                     </span>
+                  }
+                />
+                <Row
+                  label="Payment"
+                  value={
+                    target.paymentMethod === "card"
+                      ? target.paidAt
+                        ? "Credit card · paid via Stripe"
+                        : "Credit card · awaiting Stripe webhook"
+                      : "Zelle"
                   }
                 />
                 <Row label="Guests" value={`${target.guestCount}`} />
@@ -574,6 +585,7 @@ function BookingRow({
     alcohol: booking.alcohol,
     activityId: booking.activityId,
     addons: booking.addons,
+    paymentMethod: booking.paymentMethod,
   });
 
   const isHeld = booking.status === "held";
@@ -631,6 +643,29 @@ function BookingRow({
             alcohol
           </span>
         )}
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full border px-1.5 py-px text-[10px] font-mono",
+            booking.paymentMethod === "card"
+              ? booking.paidAt
+                ? "border-primary/30 bg-primary/5 text-primary"
+                : "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300"
+              : "border-card-border bg-background/50 text-muted-foreground"
+          )}
+          title={
+            booking.paymentMethod === "card"
+              ? booking.paidAt
+                ? "Card paid via Stripe"
+                : "Card pending Stripe charge"
+              : "Zelle"
+          }
+        >
+          {booking.paymentMethod === "card"
+            ? booking.paidAt
+              ? "card · paid"
+              : "card · pending"
+            : "zelle"}
+        </span>
         {booking.addons.length > 0 && (
           <span
             className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground"

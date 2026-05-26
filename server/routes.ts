@@ -17,6 +17,12 @@ import {
   startHoldExpirySweeper,
 } from "./integrations";
 import {
+  constructWebhookEvent,
+  createPaymentIntentForBooking,
+  getStripePublishableKey,
+  stripeStatus,
+} from "./stripe";
+import {
   isCalendarLiveForSpace,
   listEventsForSpace,
   SPACE_CALENDAR_ENV,
@@ -158,46 +164,54 @@ export async function registerRoutes(
     res.status(401).json({ ok: false, message: "Invalid PIN." });
   });
 
+  // Shared confirm chain so both the admin button and Stripe webhook run
+  // identical post-confirm logic (status flip → calendar patch → guest email).
+  async function runConfirmChain(bookingId: string) {
+    const booking = await storage.confirmBooking(bookingId);
+    if (!booking) throw httpError(404, "Booking not found.");
+    let calendar: Awaited<ReturnType<typeof pushBookingToCalendar>>;
+    try {
+      calendar = await pushBookingToCalendar(booking);
+      if (
+        calendar.ok &&
+        calendar.mode === "live" &&
+        "eventId" in calendar &&
+        calendar.eventId
+      ) {
+        const calendarId = booking.googleCalendarId ?? null;
+        await storage.setGoogleEvent(
+          booking.id,
+          calendar.eventId as string,
+          calendarId
+        );
+      }
+    } catch (e) {
+      console.error("calendar push error", e);
+      calendar = {
+        ok: false,
+        mode: "live" as const,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+    let email: Awaited<ReturnType<typeof sendConfirmationEmail>>;
+    try {
+      email = await sendConfirmationEmail(booking);
+    } catch (e) {
+      console.error("resend send error", e);
+      email = {
+        ok: false,
+        mode: "live" as const,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+    return { booking, calendar, email };
+  }
+
   app.post("/api/bookings/:id/confirm", requireAdmin, async (req, res, next) => {
     try {
-      const booking = await storage.confirmBooking(String(req.params.id));
-      if (!booking) throw httpError(404, "Booking not found.");
-      let calendar: Awaited<ReturnType<typeof pushBookingToCalendar>>;
-      try {
-        calendar = await pushBookingToCalendar(booking);
-        if (
-          calendar.ok &&
-          calendar.mode === "live" &&
-          "eventId" in calendar &&
-          calendar.eventId
-        ) {
-          // Persist the (possibly new) event id so subsequent operations target the right event.
-          const calendarId = booking.googleCalendarId ?? null;
-          await storage.setGoogleEvent(
-            booking.id,
-            calendar.eventId as string,
-            calendarId
-          );
-        }
-      } catch (e) {
-        console.error("calendar push error", e);
-        calendar = {
-          ok: false,
-          mode: "live" as const,
-          error: e instanceof Error ? e.message : String(e),
-        };
-      }
-      let email: Awaited<ReturnType<typeof sendConfirmationEmail>>;
-      try {
-        email = await sendConfirmationEmail(booking);
-      } catch (e) {
-        console.error("resend send error", e);
-        email = {
-          ok: false,
-          mode: "live" as const,
-          error: e instanceof Error ? e.message : String(e),
-        };
-      }
+      const { booking, calendar, email } = await runConfirmChain(
+        String(req.params.id)
+      );
       res.json({ ...booking, email, calendar });
     } catch (e) {
       next(e);
@@ -295,9 +309,132 @@ export async function registerRoutes(
     }
   });
 
+  // ----- Stripe (card payments with customer-borne surcharge) -----
+
+  // Public: returns the publishable key + fee constants so the client can
+  // initialize Stripe.js and render an accurate live preview of the surcharge.
+  app.get("/api/stripe/config", (_req, res) => {
+    const s = stripeStatus();
+    res.json({
+      mode: s.mode,
+      publishableKey: getStripePublishableKey(),
+      feePercent: s.feePercent,
+      feeFixed: s.feeFixed,
+    });
+  });
+
+  // Public (rate-limited by booking id existence): creates or updates a
+  // PaymentIntent for a card booking and returns the client secret so the
+  // Stripe Element can mount. Zelle bookings should never hit this endpoint.
+  app.post("/api/bookings/:id/stripe/intent", async (req, res, next) => {
+    try {
+      const booking = await storage.getBooking(String(req.params.id));
+      if (!booking) throw httpError(404, "Booking not found.");
+      if (booking.paymentMethod !== "card") {
+        throw httpError(
+          400,
+          "This booking is set to Zelle. Card payments are only available when 'card' is chosen at booking time."
+        );
+      }
+      if (booking.status === "confirmed") {
+        throw httpError(409, "Booking already confirmed.");
+      }
+      const result = await createPaymentIntentForBooking(booking);
+      if (!result.ok) {
+        return res.status(502).json({
+          ok: false,
+          error: result.error ?? "Stripe error",
+        });
+      }
+      if (result.paymentIntentId) {
+        await storage.setStripePaymentIntent(booking.id, result.paymentIntentId);
+      }
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Stripe webhook: verifies signature using the raw body captured by
+  // express.json's verify callback (server/index.ts). On payment_intent
+  // success we run the same confirm chain the admin button uses, so the
+  // [HOLD] Google event is patched to confirmed and the guest email is sent.
+  app.post("/api/webhooks/stripe", async (req, res, next) => {
+    try {
+      const sig = req.headers["stripe-signature"];
+      const signature = Array.isArray(sig) ? sig[0] : sig;
+      const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+      const verification = constructWebhookEvent({
+        rawBody,
+        signature,
+      });
+      if (!verification.ok) {
+        console.error("[stripe] webhook verification failed:", verification.error);
+        return res.status(400).json({ ok: false, error: verification.error });
+      }
+      const event = verification.event;
+      switch (event.type) {
+        case "payment_intent.succeeded": {
+          const pi = event.data.object as {
+            id: string;
+            metadata?: Record<string, string>;
+          };
+          const bookingId =
+            pi.metadata?.bookingId ??
+            (await storage.findBookingByStripePaymentIntent(pi.id))?.id;
+          if (!bookingId) {
+            console.warn(
+              `[stripe] webhook payment_intent.succeeded received but no booking id resolvable for PI ${pi.id}`
+            );
+            break;
+          }
+          const existing = await storage.getBooking(bookingId);
+          if (!existing) {
+            console.warn(
+              `[stripe] webhook for unknown booking ${bookingId} (PI ${pi.id})`
+            );
+            break;
+          }
+          if (existing.status === "confirmed") {
+            // Idempotent: Stripe retries webhooks. Just record paid_at.
+            await storage.markPaid(bookingId, Date.now());
+            break;
+          }
+          await storage.markPaid(bookingId, Date.now());
+          await storage.setStripePaymentIntent(bookingId, pi.id);
+          try {
+            await runConfirmChain(bookingId);
+          } catch (e) {
+            console.error(
+              `[stripe] confirm chain failed for ${bookingId} (PI ${pi.id}):`,
+              e
+            );
+          }
+          break;
+        }
+        case "payment_intent.payment_failed": {
+          const pi = event.data.object as {
+            id: string;
+            last_payment_error?: { message?: string };
+          };
+          console.warn(
+            `[stripe] payment failed for PI ${pi.id}: ${pi.last_payment_error?.message ?? "(no message)"}`
+          );
+          break;
+        }
+        default:
+          // Other events are acknowledged but not acted on for now.
+          break;
+      }
+      res.json({ received: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // ----- Integration status (admin callout) -----
   app.get("/api/integrations/status", (_req, res) => {
-    res.json(integrationsStatus());
+    res.json({ ...integrationsStatus(), stripe: stripeStatus() });
   });
 
   return httpServer;
@@ -346,6 +483,8 @@ async function mergeGoogleCalendarBusy(
             guestCount: 1,
             alcohol: false,
             addons: [],
+            paymentMethod: "zelle",
+            cardFeeAmount: 0,
             createdAt: Date.now(),
             source: "google",
           });

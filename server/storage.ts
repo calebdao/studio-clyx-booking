@@ -1,4 +1,13 @@
 import { users, bookings, addOnCatalog } from "@shared/schema";
+import {
+  computeCardSurcharge,
+  GUEST_TIER_15_RATE,
+  GUEST_TIER_25_RATE,
+  GUEST_TIER_40_RATE,
+  GUEST_MAX,
+  EVENT_CLEANING_FEE,
+  ALCOHOL_FEE,
+} from "@shared/schema";
 import type {
   User,
   InsertUser,
@@ -48,6 +57,10 @@ sqlite.exec(`
     reminder_sent_at INTEGER,
     google_event_id TEXT,
     google_calendar_id TEXT,
+    payment_method TEXT NOT NULL DEFAULT 'zelle',
+    card_fee_amount REAL NOT NULL DEFAULT 0,
+    paid_at INTEGER,
+    stripe_payment_intent_id TEXT,
     created_at INTEGER NOT NULL,
     source TEXT NOT NULL DEFAULT 'internal'
   );
@@ -84,6 +97,16 @@ ensureBookingColumn("hold_active", "hold_active INTEGER NOT NULL DEFAULT 1");
 ensureBookingColumn("reminder_sent_at", "reminder_sent_at INTEGER");
 ensureBookingColumn("google_event_id", "google_event_id TEXT");
 ensureBookingColumn("google_calendar_id", "google_calendar_id TEXT");
+ensureBookingColumn(
+  "payment_method",
+  "payment_method TEXT NOT NULL DEFAULT 'zelle'"
+);
+ensureBookingColumn(
+  "card_fee_amount",
+  "card_fee_amount REAL NOT NULL DEFAULT 0"
+);
+ensureBookingColumn("paid_at", "paid_at INTEGER");
+ensureBookingColumn("stripe_payment_intent_id", "stripe_payment_intent_id TEXT");
 
 export const db = drizzle(sqlite);
 
@@ -133,6 +156,11 @@ function rowToDto(r: BookingRow): BookingDto {
     reminderSentAt: r.reminderSentAt ?? undefined,
     googleEventId: r.googleEventId ?? undefined,
     googleCalendarId: r.googleCalendarId ?? undefined,
+    paymentMethod:
+      (r.paymentMethod as BookingDto["paymentMethod"]) ?? "zelle",
+    cardFeeAmount: r.cardFeeAmount ?? 0,
+    paidAt: r.paidAt ?? undefined,
+    stripePaymentIntentId: r.stripePaymentIntentId ?? undefined,
     createdAt: r.createdAt,
     source: r.source as BookingDto["source"],
   };
@@ -161,6 +189,51 @@ function computeAddOnLineTotal(item: {
   return Math.round(item.price * qty * 100) / 100;
 }
 
+// Local activity rate table — must mirror server/integrations.ts ACTIVITY_LABELS
+// and client/src/lib/booking-data.ts ACTIVITIES. Kept here to avoid pulling in
+// integrations.ts (which would create an unnecessary dependency from storage).
+const ACTIVITY_RATE_USD: Record<string, number> = {
+  production: 60,
+  meeting: 80,
+  event: 80,
+};
+
+function localGuestSurchargeRate(count: number): number {
+  if (count <= 15) return GUEST_TIER_15_RATE;
+  if (count <= 25) return GUEST_TIER_25_RATE;
+  if (count <= GUEST_MAX) return GUEST_TIER_40_RATE;
+  return GUEST_TIER_40_RATE;
+}
+
+function computeServerBaseTotal(args: {
+  activityId: string;
+  start: string;
+  end: string;
+  guestCount: number;
+  alcohol: boolean;
+  addons: SelectedAddOn[];
+}): number {
+  const baseRate = ACTIVITY_RATE_USD[args.activityId] ?? 0;
+  const hours = Math.max(
+    0,
+    (new Date(args.end).getTime() - new Date(args.start).getTime()) / 36e5
+  );
+  const surchargeRate = localGuestSurchargeRate(args.guestCount);
+  const base = baseRate * hours;
+  const guestSurcharge = surchargeRate * hours;
+  const cleaningFee = args.activityId === "event" ? EVENT_CLEANING_FEE : 0;
+  const alcoholFee = args.alcohol ? ALCOHOL_FEE : 0;
+  const addonsTotal = args.addons.reduce(
+    (s, a) => s + (a.lineTotal ?? 0),
+    0
+  );
+  return (
+    Math.round(
+      (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal) * 100
+    ) / 100
+  );
+}
+
 export interface IStorage {
   // legacy
   getUser(id: number): Promise<User | undefined>;
@@ -183,6 +256,15 @@ export interface IStorage {
     eventId: string | null,
     calendarId: string | null
   ): Promise<void>;
+  // Stripe
+  setStripePaymentIntent(
+    id: string,
+    paymentIntentId: string | null
+  ): Promise<void>;
+  findBookingByStripePaymentIntent(
+    paymentIntentId: string
+  ): Promise<BookingDto | undefined>;
+  markPaid(id: string, paidAt: number): Promise<BookingDto | undefined>;
   purgePrototypeSeedBookings(): Promise<number>;
   // add-on catalog
   listAddOns(includeInactive?: boolean): Promise<AddOnDto[]>;
@@ -291,6 +373,21 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // Compute card surcharge (server is authoritative). When the customer
+    // chose Zelle this stays 0; when they chose card we gross up so Stripe's
+    // fee is fully absorbed by the customer and the merchant nets the base.
+    const paymentMethod = (input.paymentMethod ?? "zelle") as "zelle" | "card";
+    const baseTotal = computeServerBaseTotal({
+      activityId: input.activityId,
+      start: input.start,
+      end: input.end,
+      guestCount: input.guestCount,
+      alcohol: input.alcohol ?? false,
+      addons: resolvedAddons,
+    });
+    const cardFeeAmount =
+      paymentMethod === "card" ? computeCardSurcharge(baseTotal) : 0;
+
     const id = `bkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const now = Date.now();
     const row: BookingRow = {
@@ -312,6 +409,10 @@ export class DatabaseStorage implements IStorage {
       reminderSentAt: null,
       googleEventId: null,
       googleCalendarId: null,
+      paymentMethod,
+      cardFeeAmount,
+      paidAt: null,
+      stripePaymentIntentId: null,
       createdAt: now,
       source: "internal",
     };
@@ -402,6 +503,37 @@ export class DatabaseStorage implements IStorage {
       .set({ googleEventId: eventId, googleCalendarId: calendarId })
       .where(eq(bookings.id, id))
       .run();
+  }
+
+  async setStripePaymentIntent(id: string, paymentIntentId: string | null) {
+    db.update(bookings)
+      .set({ stripePaymentIntentId: paymentIntentId })
+      .where(eq(bookings.id, id))
+      .run();
+  }
+
+  async findBookingByStripePaymentIntent(paymentIntentId: string) {
+    const row = db
+      .select()
+      .from(bookings)
+      .where(eq(bookings.stripePaymentIntentId, paymentIntentId))
+      .get();
+    return row ? rowToDto(row) : undefined;
+  }
+
+  async markPaid(id: string, paidAt: number) {
+    const row = db.select().from(bookings).where(eq(bookings.id, id)).get();
+    if (!row) return undefined;
+    db.update(bookings)
+      .set({ paidAt })
+      .where(eq(bookings.id, id))
+      .run();
+    const updated = db
+      .select()
+      .from(bookings)
+      .where(eq(bookings.id, id))
+      .get();
+    return updated ? rowToDto(updated) : undefined;
   }
 
   async purgePrototypeSeedBookings(): Promise<number> {

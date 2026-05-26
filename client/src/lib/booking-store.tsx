@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
-import { AddOnCatalogItem, Booking, SpaceId } from "./booking-data";
+import { AddOnCatalogItem, Booking, PaymentMethod, SpaceId } from "./booking-data";
 
 // ----- Booking data context (server-backed) -----
 
@@ -49,6 +49,28 @@ export type CreateHoldClientInput = {
   guestCount: number;
   alcohol: boolean;
   addons: { addOnId: string; quantity: number }[];
+  paymentMethod: PaymentMethod;
+};
+
+export type StripeIntentResult = {
+  ok: boolean;
+  mode: "live" | "simulation";
+  clientSecret?: string;
+  publishableKey?: string;
+  paymentIntentId?: string;
+  amount?: number;
+  baseTotal?: number;
+  cardFeeAmount?: number;
+  customerTotal?: number;
+  reason?: string;
+  error?: string;
+};
+
+export type StripeConfig = {
+  mode: "live" | "simulation";
+  publishableKey: string | null;
+  feePercent: number;
+  feeFixed: number;
 };
 
 const BookingContext = createContext<BookingCtx | null>(null);
@@ -305,4 +327,27 @@ export function useAddOnMutations() {
   });
 
   return { create, update, remove };
+}
+
+// ----- Stripe (card payments) -----
+
+const STRIPE_CONFIG_KEY = ["/api/stripe/config"] as const;
+
+export function useStripeConfig() {
+  return useQuery<StripeConfig>({
+    queryKey: STRIPE_CONFIG_KEY,
+    // Stripe config is effectively static for a deploy; cache aggressively.
+    staleTime: 5 * 60_000,
+  });
+}
+
+export async function fetchStripeIntentForBooking(
+  bookingId: string
+): Promise<StripeIntentResult> {
+  const res = await apiRequest(
+    "POST",
+    `/api/bookings/${bookingId}/stripe/intent`,
+    {}
+  );
+  return (await res.json()) as StripeIntentResult;
 }

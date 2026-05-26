@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ACTIVITIES,
   ActivityId,
@@ -12,6 +12,7 @@ import {
   GUEST_MIN,
   HOLD_DURATION_MINUTES,
   MIN_DURATION_HOURS,
+  PaymentMethod,
   PriceBreakdown,
   SelectedAddOn,
   selectedFromCatalog,
@@ -38,8 +39,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin, Minus, Plus, Users, Wine, ShoppingBag } from "lucide-react";
-import { useBookings, usePublicAddOns } from "@/lib/booking-store";
+import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin, Minus, Plus, Users, Wine, ShoppingBag, CreditCard, Banknote } from "lucide-react";
+import {
+  fetchStripeIntentForBooking,
+  useBookings,
+  usePublicAddOns,
+  useStripeConfig,
+  type StripeIntentResult,
+} from "@/lib/booking-store";
+import { StripePaymentBlock } from "@/components/stripe-payment";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -53,6 +61,7 @@ export default function BookPage() {
   const { bookings, createHoldAsync, createHoldPending, now } = useBookings();
   const { toast } = useToast();
   const { data: addOnCatalog } = usePublicAddOns();
+  const { data: stripeConfig } = useStripeConfig();
 
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
@@ -68,10 +77,13 @@ export default function BookPage() {
   const [alcohol, setAlcohol] = useState<boolean>(false);
   // selected add-ons keyed by catalog id → quantity
   const [addonQty, setAddonQty] = useState<Record<string, number>>({});
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("zelle");
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [heldBooking, setHeldBooking] = useState<Booking | null>(null);
   const [heldBreakdown, setHeldBreakdown] = useState<PriceBreakdown | null>(null);
+  const [stripeIntent, setStripeIntent] = useState<StripeIntentResult | null>(null);
+  const [stripeError, setStripeError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [policyAccepted, setPolicyAccepted] = useState(false);
 
@@ -104,8 +116,18 @@ export default function BookPage() {
       alcohol,
       activityId,
       addons: selectedAddOns,
+      paymentMethod,
     });
-  }, [isComplete, activity, slots, guestCount, alcohol, activityId, selectedAddOns]);
+  }, [
+    isComplete,
+    activity,
+    slots,
+    guestCount,
+    alcohol,
+    activityId,
+    selectedAddOns,
+    paymentMethod,
+  ]);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const guestValid = !!(first.trim() && last.trim() && emailValid);
@@ -138,11 +160,34 @@ export default function BookPage() {
         guestCount,
         alcohol,
         addons: selectedAddOns.map((a) => ({ addOnId: a.addOnId, quantity: a.quantity })),
+        paymentMethod,
       });
       setHeldBooking(b);
       setHeldBreakdown(breakdown);
+      setStripeIntent(null);
+      setStripeError(null);
       setConfirmOpen(true);
       setSelection(null);
+
+      // For card payments, immediately create a Stripe PaymentIntent so the
+      // Elements form can render in the dialog. Failures here aren't fatal —
+      // the hold is already placed; the customer can retry or switch to Zelle.
+      if (paymentMethod === "card") {
+        try {
+          const intent = await fetchStripeIntentForBooking(b.id);
+          if (intent.ok) {
+            setStripeIntent(intent);
+          } else {
+            setStripeError(intent.error ?? "Could not start card payment.");
+          }
+        } catch (intentErr) {
+          setStripeError(
+            intentErr instanceof Error
+              ? intentErr.message
+              : "Could not start card payment."
+          );
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Could not place hold.";
       toast({
@@ -648,7 +693,14 @@ export default function BookPage() {
                 )}
               </div>
             </dl>
-            <div className="p-4 border-t border-card-border space-y-2">
+            <div className="p-4 border-t border-card-border space-y-3">
+              <PaymentMethodPicker
+                value={paymentMethod}
+                onChange={setPaymentMethod}
+                subtotal={breakdown?.subtotal ?? 0}
+                cardFee={breakdown?.cardFee ?? 0}
+                disabled={createHoldPending}
+              />
               <CancellationPolicyNotice />
 
               <label className="flex items-start gap-2.5 rounded-md border border-card-border bg-background/35 p-3 text-xs leading-relaxed cursor-pointer">
@@ -704,10 +756,21 @@ export default function BookPage() {
           </div>
 
           <div className="mt-4 px-1 text-[11px] text-muted-foreground leading-relaxed">
-            Payment is collected via Zelle to{" "}
-            <span className="font-mono text-foreground">{ZELLE_RECIPIENT}</span> after you reserve.
-            Slots are held for {HOLD_DURATION_MINUTES} minutes pending confirmation. Payment
-            confirmation typically takes approximately 10–30 minutes.
+            {paymentMethod === "card" ? (
+              <>
+                Payment is collected by credit card at the time of booking via
+                Stripe. Slots are held for {HOLD_DURATION_MINUTES} minutes pending
+                payment.
+              </>
+            ) : (
+              <>
+                Payment is collected via Zelle to{" "}
+                <span className="font-mono text-foreground">{ZELLE_RECIPIENT}</span>{" "}
+                after you reserve. Slots are held for {HOLD_DURATION_MINUTES} minutes
+                pending confirmation. Payment confirmation typically takes
+                approximately 10–30 minutes.
+              </>
+            )}
           </div>
         </aside>
       </div>
@@ -718,12 +781,25 @@ export default function BookPage() {
           <DialogHeader>
             <div className="text-eyebrow text-primary mb-1.5">Hold confirmed</div>
             <DialogTitle className="tracking-tight">
-              Send payment via Zelle to lock in your booking
+              {heldBooking?.paymentMethod === "card"
+                ? "Enter your card to lock in your booking"
+                : "Send payment via Zelle to lock in your booking"}
             </DialogTitle>
             <DialogDescription className="leading-relaxed pt-1">
-              We've placed a {HOLD_DURATION_MINUTES}-minute hold. Studio Clyx will confirm your booking
-              once payment arrives — payment confirmation typically takes approximately 10–30 minutes,
-              and you'll receive a confirmation email.
+              {heldBooking?.paymentMethod === "card" ? (
+                <>
+                  We've placed a {HOLD_DURATION_MINUTES}-minute hold. Pay below to
+                  confirm your booking — you'll receive a confirmation email as
+                  soon as the charge settles.
+                </>
+              ) : (
+                <>
+                  We've placed a {HOLD_DURATION_MINUTES}-minute hold. Studio Clyx will
+                  confirm your booking once payment arrives — payment confirmation
+                  typically takes approximately 10–30 minutes, and you'll receive a
+                  confirmation email.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
 
@@ -793,23 +869,49 @@ export default function BookPage() {
             </div>
           )}
 
-          {/* Zelle handoff */}
-          <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-4">
-            <div className="text-eyebrow text-primary mb-2">Zelle payment</div>
-            <div className="flex items-center justify-between gap-3">
-              <code className="font-mono text-sm break-all" data-testid="text-zelle-recipient">
-                {ZELLE_RECIPIENT}
-              </code>
-              <Button size="sm" variant="outline" onClick={copyZelle} data-testid="button-copy-zelle">
-                {copied ? <Check className="w-3.5 h-3.5 mr-1" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
-                {copied ? "Copied" : "Copy"}
-              </Button>
+          {/* Payment handoff — card or Zelle, based on what the customer chose */}
+          {heldBooking?.paymentMethod === "card" ? (
+            <div className="mt-3 space-y-2">
+              {stripeError && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
+                  {stripeError}
+                </div>
+              )}
+              {stripeIntent && stripeIntent.clientSecret ? (
+                <StripePaymentBlock
+                  clientSecret={stripeIntent.clientSecret}
+                  publishableKey={stripeIntent.publishableKey ?? stripeConfig?.publishableKey ?? null}
+                  customerTotal={stripeIntent.customerTotal ?? heldBreakdown?.total ?? 0}
+                  cardFeeAmount={stripeIntent.cardFeeAmount ?? heldBreakdown?.cardFee ?? 0}
+                  bookingId={heldBooking.id}
+                  simulationMode={stripeIntent.mode === "simulation"}
+                />
+              ) : (
+                !stripeError && (
+                  <div className="rounded-md border border-card-border bg-background/50 p-4 text-xs text-muted-foreground">
+                    Loading secure card form…
+                  </div>
+                )
+              )}
             </div>
-            <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
-              Open your bank's Zelle, send the total above to this address, and include your name in
-              the memo.
-            </p>
-          </div>
+          ) : (
+            <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-4">
+              <div className="text-eyebrow text-primary mb-2">Zelle payment</div>
+              <div className="flex items-center justify-between gap-3">
+                <code className="font-mono text-sm break-all" data-testid="text-zelle-recipient">
+                  {ZELLE_RECIPIENT}
+                </code>
+                <Button size="sm" variant="outline" onClick={copyZelle} data-testid="button-copy-zelle">
+                  {copied ? <Check className="w-3.5 h-3.5 mr-1" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
+                Open your bank's Zelle, send the total above to this address, and include your name in
+                the memo.
+              </p>
+            </div>
+          )}
 
           <CancellationPolicyNotice compact />
 
@@ -905,6 +1007,81 @@ function ConfirmRow({ label, value }: { label: string; value: React.ReactNode })
     <div className="px-3.5 py-2.5 flex items-center justify-between gap-4">
       <span className="text-eyebrow">{label}</span>
       <span className="text-sm font-medium text-right">{value}</span>
+    </div>
+  );
+}
+
+function PaymentMethodPicker({
+  value,
+  onChange,
+  subtotal,
+  cardFee,
+  disabled,
+}: {
+  value: PaymentMethod;
+  onChange: (next: PaymentMethod) => void;
+  subtotal: number;
+  cardFee: number;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      className="rounded-md border border-card-border bg-background/45 p-3"
+      data-testid="payment-method-picker"
+    >
+      <div className="text-eyebrow text-primary mb-2">Payment method</div>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => onChange("zelle")}
+          disabled={disabled}
+          className={cn(
+            "rounded-md border p-2.5 text-left transition-colors",
+            value === "zelle"
+              ? "border-primary bg-primary/5"
+              : "border-card-border bg-background/40 hover:border-primary/40",
+            disabled && "opacity-60 cursor-not-allowed"
+          )}
+          data-testid="payment-method-zelle"
+        >
+          <div className="flex items-center gap-1.5 text-xs font-medium">
+            <Banknote className="w-3.5 h-3.5 text-primary" />
+            Zelle
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground leading-tight">
+            No fee · pay after holding
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange("card")}
+          disabled={disabled}
+          className={cn(
+            "rounded-md border p-2.5 text-left transition-colors",
+            value === "card"
+              ? "border-primary bg-primary/5"
+              : "border-card-border bg-background/40 hover:border-primary/40",
+            disabled && "opacity-60 cursor-not-allowed"
+          )}
+          data-testid="payment-method-card"
+        >
+          <div className="flex items-center gap-1.5 text-xs font-medium">
+            <CreditCard className="w-3.5 h-3.5 text-primary" />
+            Credit card
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground leading-tight">
+            {subtotal > 0
+              ? `+${fmtMoney(cardFee)} processing fee`
+              : "Adds 2.9% + $0.30 fee"}
+          </div>
+        </button>
+      </div>
+      {value === "card" && subtotal > 0 && (
+        <p className="mt-2 text-[10px] text-muted-foreground leading-relaxed">
+          The card processing fee passes through Stripe's exact cost so Studio
+          Clyx receives the full booking total. Choose Zelle to avoid it.
+        </p>
+      )}
     </div>
   );
 }

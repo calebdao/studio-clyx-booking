@@ -285,7 +285,9 @@ interface PriceSummary {
   cleaningFee: number;
   alcoholFee: number;
   addonsTotal: number;
-  total: number;
+  cardFee: number;
+  subtotal: number; // total without card fee (what merchant nets on a successful card charge)
+  total: number; // what the customer actually owes (includes card fee if applicable)
   lines: PriceLineItem[];
   guestTier: string;
 }
@@ -307,7 +309,14 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
   const alcoholFee = booking.alcohol ? ALCOHOL_FEE : 0;
   const addons: SelectedAddOn[] = booking.addons ?? [];
   const addonsTotal = round2(addons.reduce((s, a) => s + (a.lineTotal ?? 0), 0));
-  const total = round2(base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal);
+  const subtotal = round2(
+    base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal
+  );
+  const cardFee =
+    booking.paymentMethod === "card"
+      ? round2(booking.cardFeeAmount ?? 0)
+      : 0;
+  const total = round2(subtotal + cardFee);
 
   const lines: PriceLineItem[] = [
     {
@@ -339,6 +348,13 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
       amount: a.lineTotal,
     });
   }
+  if (cardFee > 0) {
+    lines.push({
+      label: "Card processing fee",
+      detail: "2.9% + $0.30 (passed through from Stripe)",
+      amount: cardFee,
+    });
+  }
   return {
     hours: durationHours,
     base,
@@ -347,6 +363,8 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
     cleaningFee,
     alcoholFee,
     addonsTotal,
+    cardFee,
+    subtotal,
     total,
     lines,
     guestTier: guestTierLabelServer(booking.guestCount ?? 1),
@@ -416,8 +434,12 @@ export function buildConfirmationEmail(booking: BookingDto) {
     "Price breakdown:",
     ...formatPriceLinesText(pricing),
     "",
-    `Payment: Zelle to ${ZELLE_RECIPIENT}.`,
-    `Reference: ${booking.id} (please include this in the Zelle memo).`,
+    booking.paymentMethod === "card"
+      ? `Payment: Credit card · charged via Stripe at booking ($${pricing.total.toFixed(2)} total, includes $${pricing.cardFee.toFixed(2)} card processing fee).`
+      : `Payment: Zelle to ${ZELLE_RECIPIENT}.`,
+    booking.paymentMethod === "card"
+      ? `A receipt was emailed to you by Stripe.`
+      : `Reference: ${booking.id} (please include this in the Zelle memo).`,
     "",
     CANCELLATION_POLICY_TITLE,
     "",
@@ -485,8 +507,20 @@ export function buildConfirmationEmail(booking: BookingDto) {
         <tr><td style="padding:0 28px 24px 28px;">
           <div style="border-top:1px solid #D4D1CA;padding-top:18px;">
             <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">Payment</div>
-            <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Send via Zelle to <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(ZELLE_RECIPIENT)}</strong>.</p>
-            <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Reference: <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(booking.id)}</strong> — please include this in the Zelle memo so we can match the payment.</p>
+            ${
+              booking.paymentMethod === "card"
+                ? `<p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Charged to your card via Stripe — <strong>$${pricing.total.toFixed(
+                    2
+                  )}</strong> (includes $${pricing.cardFee.toFixed(
+                    2
+                  )} card processing fee). A receipt was emailed to you by Stripe.</p>`
+                : `<p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Send via Zelle to <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(
+                    ZELLE_RECIPIENT
+                  )}</strong>.</p>
+            <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Reference: <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(
+                  booking.id
+                )}</strong> — please include this in the Zelle memo so we can match the payment.</p>`
+            }
           </div>
         </td></tr>
         <tr><td style="padding:0 28px 24px 28px;">
@@ -604,6 +638,11 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
   const phone = booking.guest.phone || "Not provided";
   const subject = `New Studio Clyx booking hold — ${space} (${dateLabel})`;
 
+  const paymentLine =
+    booking.paymentMethod === "card"
+      ? `Payment: Credit card via Stripe — auto-confirmed on payment_intent.succeeded webhook.`
+      : `Payment expected by Zelle to ${ZELLE_RECIPIENT}. Ask the guest to include booking ID ${booking.id} in the Zelle memo.`;
+
   const text = [
     "New booking hold received.",
     "",
@@ -613,6 +652,7 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
     `Phone:         ${phone}`,
     `Guests:        ${booking.guestCount}`,
     booking.alcohol ? `Alcohol:       yes ($${ALCOHOL_FEE} fee)` : `Alcohol:       no`,
+    `Payment:       ${booking.paymentMethod === "card" ? "Credit card (Stripe)" : "Zelle"}`,
     `Space:         ${space}`,
     `Activity:      ${activityLabel}`,
     `Date:          ${dateLabel}`,
@@ -623,8 +663,7 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
     "Price breakdown:",
     ...formatPriceLinesText(pricing),
     "",
-    `Payment expected by Zelle to ${ZELLE_RECIPIENT}.`,
-    `Ask the guest to include booking ID ${booking.id} in the Zelle memo.`,
+    paymentLine,
     "",
     `Hold window: 1 hour. After that, the slot frees up and a reminder is sent to ${getOwnerReminderRecipient()} if still unpaid.`,
     "",
@@ -658,7 +697,11 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
         <tr><td style="padding:28px;">
           <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#01696F;font-weight:600;">Studio Clyx</div>
           <h1 style="margin:6px 0 10px 0;font-size:22px;font-weight:600;letter-spacing:-0.01em;color:#28251D;">New booking hold received</h1>
-          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.5;color:#28251D;">A guest placed a 1-hour hold. Confirm payment in the admin panel once the Zelle payment lands. Payment confirmation typically takes ${PAYMENT_WINDOW_LABEL} on the guest's side.</p>
+          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.5;color:#28251D;">${
+            booking.paymentMethod === "card"
+              ? `A guest placed a 1-hour hold and chose to pay by credit card. Once Stripe confirms payment, the booking will be auto-confirmed and the guest will receive the confirmation email.`
+              : `A guest placed a 1-hour hold. Confirm payment in the admin panel once the Zelle payment lands. Payment confirmation typically takes ${PAYMENT_WINDOW_LABEL} on the guest's side.`
+          }</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;line-height:1.5;">
             ${row("Booking ID", booking.id, true)}
             ${row("Guest", guestName)}
@@ -666,6 +709,10 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
             ${row("Phone", phone)}
             ${row("Guests", String(booking.guestCount))}
             ${row("Alcohol", booking.alcohol ? "yes" : "no")}
+            ${row(
+              "Payment",
+              booking.paymentMethod === "card" ? "Credit card (Stripe)" : "Zelle"
+            )}
             ${row("Space", space)}
             ${row("Activity", activityLabel)}
             ${row("Date", dateLabel)}
@@ -680,8 +727,16 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
             ${addonsHtml ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:8px;">${addonsHtml}</table>` : ""}
           </div>
           <div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
-            <p style="margin:0;font-size:14px;line-height:1.5;">Payment expected by Zelle to <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(ZELLE_RECIPIENT)}</strong>.</p>
-            <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Memo/reference: <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(booking.id)}</strong>.</p>
+            ${
+              booking.paymentMethod === "card"
+                ? `<p style="margin:0;font-size:14px;line-height:1.5;">Payment will be auto-confirmed via Stripe <code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">payment_intent.succeeded</code> webhook. No manual action required.</p>`
+                : `<p style="margin:0;font-size:14px;line-height:1.5;">Payment expected by Zelle to <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(
+                    ZELLE_RECIPIENT
+                  )}</strong>.</p>
+            <p style="margin:6px 0 0 0;font-size:14px;line-height:1.5;">Memo/reference: <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(
+                  booking.id
+                )}</strong>.</p>`
+            }
           </div>
         </td></tr>
       </table>

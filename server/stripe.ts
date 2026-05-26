@@ -97,7 +97,10 @@ export async function createPaymentIntentForBooking(
   booking: BookingDto
 ): Promise<CreatePaymentIntentResult> {
   const pricing = computeBookingPricing(booking);
-  const baseTotal = pricing.total;
+  // IMPORTANT: pricing.total already includes the card fee line when the
+  // booking is on `paymentMethod: "card"`. We must surcharge the *subtotal*
+  // (everything except the card fee) so the fee is counted exactly once.
+  const baseTotal = pricing.subtotal;
   // Re-compute the surcharge here so the amount Stripe sees always matches the
   // shared formula. We could trust the row but recomputing is cheap and
   // guarantees no drift if Stripe fee constants change later.

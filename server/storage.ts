@@ -28,7 +28,16 @@ import {
   listEventsForSpace,
 } from "./google-calendar";
 
-const sqlite = new Database("data.db");
+// SQLite database file location.
+//
+// Render's standard web service has an ephemeral filesystem — every redeploy
+// resets the disk. To keep our SQLite database from being wiped, we let the
+// path be overridden via DATABASE_PATH. In production we point it at a Render
+// persistent disk mount (e.g. /var/data/data.db). Locally / in tests, the
+// default `data.db` in the working directory still works.
+const DB_PATH = process.env.DATABASE_PATH || "data.db";
+console.log(`[storage] opening SQLite at ${DB_PATH}`);
+const sqlite = new Database(DB_PATH);
 sqlite.pragma("journal_mode = WAL");
 
 // Bootstrap tables (drizzle-kit not run inside the sandbox; create idempotently).

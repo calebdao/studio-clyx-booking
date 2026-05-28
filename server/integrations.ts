@@ -843,6 +843,83 @@ export async function sendOwnerReminderEmail(booking: BookingDto) {
   });
 }
 
+// ----- Card-flow: slot-taken auto-refund email -----
+//
+// When a customer pays by card but their slot got grabbed by another channel
+// between PI creation and payment_intent.succeeded, the webhook auto-refunds
+// the customer and sends this apology email.
+
+export interface SlotTakenRefundEmailArgs {
+  to: string;
+  guestFirstName: string;
+  spaceId: BookingDto["spaceId"];
+  start: string;
+  end: string;
+  refundAmount: number;
+  paymentIntentId: string;
+}
+
+export async function sendSlotTakenRefundEmail(args: SlotTakenRefundEmailArgs) {
+  const space = SPACE_LABELS[args.spaceId] ?? args.spaceId;
+  const startDate = new Date(args.start);
+  const endDate = new Date(args.end);
+  const dateFmt = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "America/New_York",
+  });
+  const timeFmt = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/New_York",
+    timeZoneName: "short",
+  });
+  const dateLabel = dateFmt.format(startDate);
+  const startLabel = timeFmt.format(startDate);
+  const endLabel = timeFmt.format(endDate);
+  const subject = `Studio Clyx — your card was refunded, slot no longer available`;
+  const text = [
+    `Hi ${args.guestFirstName},`,
+    "",
+    `Apologies — between the time you started checkout and when your card cleared, the ${space} slot on ${dateLabel} (${startLabel} → ${endLabel}) was booked through another channel.`,
+    "",
+    `We've refunded your card the full amount of $${args.refundAmount.toFixed(2)}. The refund will show up in your account in 5–10 business days, depending on your bank.`,
+    "",
+    `Please head back to https://www.studioclyx.com/book-now to pick a different time. We'd love to host you.`,
+    "",
+    `Stripe reference: ${args.paymentIntentId}.`,
+    "",
+    `— Studio Clyx`,
+  ].join("\n");
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:#F7F6F2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#28251D;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F7F6F2;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;width:100%;background:#FBFBF9;border:1px solid #D4D1CA;border-radius:8px;">
+        <tr><td style="padding:28px;">
+          <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#964219;font-weight:600;">Studio Clyx</div>
+          <h1 style="margin:6px 0 10px 0;font-size:22px;font-weight:600;letter-spacing:-0.01em;color:#28251D;">Sorry — your slot was just taken</h1>
+          <p style="margin:0 0 14px 0;font-size:14px;line-height:1.55;color:#28251D;">Hi ${escapeHtml(args.guestFirstName)}, apologies — between the moment you started checkout and your card clearing, the ${escapeHtml(space)} slot on ${escapeHtml(dateLabel)} (${escapeHtml(startLabel)} → ${escapeHtml(endLabel)}) was booked through another channel.</p>
+          <p style="margin:0 0 14px 0;font-size:14px;line-height:1.55;color:#28251D;">We've issued a full refund of <strong>$${args.refundAmount.toFixed(2)}</strong> to your card. The refund will show in your account in 5–10 business days depending on your bank.</p>
+          <p style="margin:0 0 14px 0;font-size:14px;line-height:1.55;color:#28251D;">Please <a href="https://www.studioclyx.com/book-now" style="color:#01696F;font-weight:600;">pick a different time</a> — we'd love to host you.</p>
+          <p style="margin:18px 0 0 0;font-size:11px;color:#7A7974;line-height:1.5;">Stripe reference: ${escapeHtml(args.paymentIntentId)}</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+  return sendResendEmail({
+    to: args.to,
+    subject,
+    text,
+    html,
+    label: "slot-taken refund",
+    bookingId: args.paymentIntentId,
+  });
+}
+
 // ----- Sweeper: handles hold expiry + reminder dispatch -----
 
 export type SweeperHooks = {

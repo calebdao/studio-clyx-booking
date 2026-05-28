@@ -5,7 +5,11 @@ import {
   createHoldSchema,
   createAddOnSchema,
   updateAddOnSchema,
+  EVENT_CLEANING_FEE,
+  ALCOHOL_FEE,
+  guestSurchargeRate,
   type BookingDto,
+  type SelectedAddOn,
 } from "@shared/schema";
 import {
   integrationsStatus,
@@ -18,10 +22,14 @@ import {
 } from "./integrations";
 import {
   constructWebhookEvent,
+  createDraftPaymentIntent,
   createPaymentIntentForBooking,
+  decodeDraftMetadata,
   getStripePublishableKey,
+  refundPaymentIntent,
   stripeStatus,
 } from "./stripe";
+import { sendSlotTakenRefundEmail } from "./integrations";
 import {
   isCalendarLiveForSpace,
   listEventsForSpace,
@@ -62,6 +70,116 @@ function httpError(status: number, message: string) {
   const e = new Error(message) as Error & { status?: number };
   e.status = status;
   return e;
+}
+
+// Local activity rate table — kept in sync with server/integrations.ts and
+// client/src/lib/booking-data.ts. Used to compute the base total for the
+// no-hold card flow before the booking row exists.
+const ACTIVITY_RATE_USD: Record<string, number> = {
+  production: 60,
+  meeting: 80,
+  event: 80,
+};
+
+async function previewBookingConflict(
+  spaceId: BookingDto["spaceId"],
+  startIso: string,
+  endIso: string
+): Promise<string | null> {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  // Internal bookings
+  const all = await storage.listBookings();
+  const blocker = all.find((b) => {
+    if (b.spaceId !== spaceId) return false;
+    if (b.status === "rejected") return false;
+    if ((b.status === "held" || b.status === "pending") && !b.holdActive)
+      return false;
+    if (b.source === "google") {
+      // already-known external event; surfaced from listBookings()
+    }
+    const bs = new Date(b.start).getTime();
+    const be = new Date(b.end).getTime();
+    return bs < end && be > start;
+  });
+  if (blocker) {
+    return "This slot is no longer available.";
+  }
+  // Google Calendar live check (will already be merged via listBookings, but
+  // double-check defensively in case of cache).
+  if (isCalendarLiveForSpace(spaceId)) {
+    const gc = await listEventsForSpace(
+      spaceId,
+      new Date(start),
+      new Date(end)
+    );
+    if (gc.ok) {
+      const ev = gc.events.find((e) => {
+        const bs = new Date(e.start).getTime();
+        const be = new Date(e.end).getTime();
+        return bs < end && be > start;
+      });
+      if (ev) {
+        return "This slot is no longer available (blocked by an external calendar event).";
+      }
+    }
+  }
+  return null;
+}
+
+async function resolveAddonsForBooking(
+  inputAddons: Array<{ addOnId: string; quantity: number }>
+): Promise<SelectedAddOn[]> {
+  if (!inputAddons || inputAddons.length === 0) return [];
+  const catalog = await storage.listAddOns(false); // active only
+  const byId = new Map(catalog.map((c) => [c.id, c]));
+  const out: SelectedAddOn[] = [];
+  for (const a of inputAddons) {
+    const item = byId.get(a.addOnId);
+    if (!item) continue;
+    const lineTotal =
+      item.priceType === "flat"
+        ? Math.round(item.price * 100) / 100
+        : Math.round(item.price * a.quantity * 100) / 100;
+    out.push({
+      addOnId: item.id,
+      name: item.name,
+      price: item.price,
+      priceType: item.priceType,
+      quantity: a.quantity,
+      lineTotal,
+    });
+  }
+  return out;
+}
+
+function computePreviewBaseTotal(args: {
+  activityId: string;
+  start: string;
+  end: string;
+  guestCount: number;
+  alcohol: boolean;
+  addons: SelectedAddOn[];
+}): number {
+  const baseRate = ACTIVITY_RATE_USD[args.activityId] ?? 0;
+  const hours = Math.max(
+    0,
+    (new Date(args.end).getTime() - new Date(args.start).getTime()) / 36e5
+  );
+  const surchargeRate = guestSurchargeRate(args.guestCount);
+  const base = baseRate * hours;
+  const guestSurcharge = surchargeRate * hours;
+  const cleaningFee = args.activityId === "event" ? EVENT_CLEANING_FEE : 0;
+  const alcoholFee = args.alcohol ? ALCOHOL_FEE : 0;
+  const addonsTotal = args.addons.reduce(
+    (s, a) => s + (a.lineTotal ?? 0),
+    0
+  );
+  return (
+    Math.round(
+      (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal) * 100
+    ) / 100
+  );
 }
 
 export async function registerRoutes(
@@ -113,10 +231,101 @@ export async function registerRoutes(
       }
       validateBookingRules(start, end);
       await storage.expireHolds(Date.now());
+
+      // Card path: do NOT create a booking row or a Google hold. Just create
+      // a Stripe PaymentIntent with all the booking details in metadata. The
+      // booking is materialized in the DB only when the webhook reports
+      // `payment_intent.succeeded`. This eliminates the "I clicked Book now
+      // then changed my mind and now my own slot is locked" UX problem.
+      if (input.paymentMethod === "card") {
+        // Still run a conflict check so we don't take a customer's money for
+        // an obviously-unavailable slot. Races between this check and the
+        // webhook are caught by `createConfirmedBookingFromDraft` (it re-runs
+        // the conflict check and auto-refunds if needed).
+        const conflictPreview = await previewBookingConflict(
+          input.spaceId,
+          input.start,
+          input.end
+        );
+        if (conflictPreview) {
+          throw httpError(409, conflictPreview);
+        }
+
+        // Resolve addons & compute the base total server-side so the customer
+        // sees authoritative numbers in the Stripe Element.
+        const resolvedAddons = await resolveAddonsForBooking(input.addons);
+        const baseTotal = computePreviewBaseTotal({
+          activityId: input.activityId,
+          start: input.start,
+          end: input.end,
+          guestCount: input.guestCount,
+          alcohol: input.alcohol,
+          addons: resolvedAddons,
+        });
+        const piResult = await createDraftPaymentIntent({
+          spaceId: input.spaceId,
+          activityId: input.activityId,
+          start: input.start,
+          end: input.end,
+          guest: {
+            firstName: input.guest.firstName,
+            lastName: input.guest.lastName,
+            email: input.guest.email,
+            phone: input.guest.phone,
+          },
+          guestCount: input.guestCount,
+          alcohol: input.alcohol,
+          addons: resolvedAddons,
+          baseTotal,
+        });
+        if (!piResult.ok) {
+          return res.status(502).json({
+            ok: false,
+            error: piResult.error ?? "Stripe error",
+          });
+        }
+        // Synthetic booking-shaped object for client display only — NOT in DB.
+        const preview = {
+          id: piResult.paymentIntentId ?? `pi_pending_${Date.now()}`,
+          spaceId: input.spaceId,
+          activityId: input.activityId,
+          start: input.start,
+          end: input.end,
+          status: "pending" as const,
+          guest: {
+            firstName: input.guest.firstName,
+            lastName: input.guest.lastName,
+            email: input.guest.email,
+            phone: input.guest.phone,
+          },
+          guestCount: input.guestCount,
+          alcohol: input.alcohol,
+          addons: resolvedAddons,
+          // No holdExpiresAt / holdActive — the dialog hides the timer entirely
+          // for card customers so they don't see a misleading countdown.
+          paymentMethod: "card" as const,
+          cardFeeAmount: piResult.cardFeeAmount,
+          createdAt: Date.now(),
+          source: "internal" as const,
+        };
+        return res.status(201).json({
+          ...preview,
+          _stripe: {
+            clientSecret: piResult.clientSecret,
+            publishableKey: piResult.publishableKey,
+            paymentIntentId: piResult.paymentIntentId,
+            mode: piResult.mode,
+            baseTotal: piResult.baseTotal,
+            cardFeeAmount: piResult.cardFeeAmount,
+            customerTotal: piResult.customerTotal,
+          },
+        });
+      }
+
+      // Zelle path — unchanged behavior. Create the booking, hold the slot,
+      // push the Google Calendar event, fire the owner alert.
       const booking = await storage.createHold(input);
 
-      // Push a tentative hold event to Google Calendar (if configured) so the
-      // slot is blocked across all channels while we wait for payment.
       try {
         const cal = await pushHoldToCalendar(booking);
         if (cal.ok && cal.mode === "live" && "eventId" in cal && "calendarId" in cal) {
@@ -378,9 +587,125 @@ export async function registerRoutes(
           const pi = event.data.object as {
             id: string;
             metadata?: Record<string, string>;
+            amount?: number;
           };
+          const meta = pi.metadata ?? {};
+
+          // New flow (no-hold): the PaymentIntent was created without a
+          // backing booking row. Materialize the booking now if the slot is
+          // still available; otherwise auto-refund and email the customer.
+          if (meta.bookingDraft === "1") {
+            const draft = decodeDraftMetadata(meta);
+            if (!draft) {
+              console.error(
+                `[stripe] webhook: PI ${pi.id} has bookingDraft=1 but metadata failed to decode`
+              );
+              break;
+            }
+            // Idempotency check first — Stripe retries.
+            const existing = await storage.findBookingByStripePaymentIntent(pi.id);
+            if (existing) {
+              console.log(
+                `[stripe] webhook: booking ${existing.id} already materialized for PI ${pi.id}, skipping`
+              );
+              break;
+            }
+            const result = await storage.createConfirmedBookingFromDraft({
+              spaceId: draft.spaceId,
+              activityId: draft.activityId,
+              start: draft.start,
+              end: draft.end,
+              guest: draft.guest,
+              guestCount: draft.guestCount,
+              alcohol: draft.alcohol,
+              addons: draft.addons,
+              cardFeeAmount: draft.cardFeeAmount,
+              stripePaymentIntentId: pi.id,
+              paidAt: Date.now(),
+            });
+            if (!result.ok) {
+              // Race: slot was taken between Book Now and payment success.
+              console.warn(
+                `[stripe] slot conflict during card confirm for PI ${pi.id}: ${result.reason}. Auto-refunding.`
+              );
+              try {
+                await refundPaymentIntent(pi.id, "requested_by_customer");
+              } catch (e) {
+                console.error(
+                  `[stripe] auto-refund failed for PI ${pi.id}:`,
+                  e
+                );
+              }
+              try {
+                await sendSlotTakenRefundEmail({
+                  to: draft.guest.email,
+                  guestFirstName: draft.guest.firstName,
+                  spaceId: draft.spaceId,
+                  start: draft.start,
+                  end: draft.end,
+                  refundAmount: draft.customerTotal,
+                  paymentIntentId: pi.id,
+                });
+              } catch (e) {
+                console.error(
+                  `[stripe] slot-taken email failed for PI ${pi.id}:`,
+                  e
+                );
+              }
+              break;
+            }
+            // Successful materialization. Push to Google Calendar and send
+            // the customer the regular confirmation email.
+            const booking = result.booking;
+            try {
+              const calendar = await pushBookingToCalendar(booking);
+              if (
+                calendar.ok &&
+                calendar.mode === "live" &&
+                "eventId" in calendar &&
+                calendar.eventId
+              ) {
+                await storage.setGoogleEvent(
+                  booking.id,
+                  calendar.eventId as string,
+                  booking.googleCalendarId ?? null
+                );
+              }
+            } catch (e) {
+              console.error(
+                `[stripe] calendar push failed for ${booking.id}:`,
+                e
+              );
+            }
+            try {
+              await sendConfirmationEmail(booking);
+            } catch (e) {
+              console.error(
+                `[stripe] customer confirmation email failed for ${booking.id}:`,
+                e
+              );
+            }
+            // Owner alert: tell the operator a card booking just landed.
+            try {
+              await sendOwnerBookingAlert(booking);
+            } catch (e) {
+              console.error(
+                `[stripe] owner alert failed for ${booking.id}:`,
+                e
+              );
+            }
+            console.log(
+              `[stripe] webhook: materialized confirmed booking ${booking.id} from PI ${pi.id}`
+            );
+            break;
+          }
+
+          // Legacy flow: PI was created against an existing pending booking
+          // row (the old card path before we removed the hold). Kept here so
+          // any bookings created by the previous deploy still get confirmed
+          // when their card clears.
           const bookingId =
-            pi.metadata?.bookingId ??
+            meta.bookingId ??
             (await storage.findBookingByStripePaymentIntent(pi.id))?.id;
           if (!bookingId) {
             console.warn(
@@ -396,7 +721,6 @@ export async function registerRoutes(
             break;
           }
           if (existing.status === "confirmed") {
-            // Idempotent: Stripe retries webhooks. Just record paid_at.
             await storage.markPaid(bookingId, Date.now());
             break;
           }

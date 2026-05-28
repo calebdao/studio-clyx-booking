@@ -265,6 +265,26 @@ export interface IStorage {
     paymentIntentId: string
   ): Promise<BookingDto | undefined>;
   markPaid(id: string, paidAt: number): Promise<BookingDto | undefined>;
+  // Create a confirmed booking directly from a paid Stripe PaymentIntent.
+  // Used by the no-hold card flow: we only insert the row once payment clears.
+  // Returns { booking } on success or { conflict: true } if the slot was
+  // grabbed by another channel between PI creation and webhook delivery.
+  createConfirmedBookingFromDraft(args: {
+    spaceId: BookingDto["spaceId"];
+    activityId: BookingDto["activityId"];
+    start: string;
+    end: string;
+    guest: BookingDto["guest"];
+    guestCount: number;
+    alcohol: boolean;
+    addons: Array<{ addOnId: string; quantity: number }>;
+    cardFeeAmount: number;
+    stripePaymentIntentId: string;
+    paidAt: number;
+  }): Promise<
+    | { ok: true; booking: BookingDto }
+    | { ok: false; conflict: true; reason: string }
+  >;
   purgePrototypeSeedBookings(): Promise<number>;
   // add-on catalog
   listAddOns(includeInactive?: boolean): Promise<AddOnDto[]>;
@@ -534,6 +554,146 @@ export class DatabaseStorage implements IStorage {
       .where(eq(bookings.id, id))
       .get();
     return updated ? rowToDto(updated) : undefined;
+  }
+
+  async createConfirmedBookingFromDraft(args: {
+    spaceId: BookingDto["spaceId"];
+    activityId: BookingDto["activityId"];
+    start: string;
+    end: string;
+    guest: BookingDto["guest"];
+    guestCount: number;
+    alcohol: boolean;
+    addons: Array<{ addOnId: string; quantity: number }>;
+    cardFeeAmount: number;
+    stripePaymentIntentId: string;
+    paidAt: number;
+  }): Promise<
+    | { ok: true; booking: BookingDto }
+    | { ok: false; conflict: true; reason: string }
+  > {
+    // Idempotency: if a booking already exists for this PaymentIntent (Stripe
+    // webhook retries are common), return that existing row instead of double-
+    // inserting.
+    const existingByPi = db
+      .select()
+      .from(bookings)
+      .where(eq(bookings.stripePaymentIntentId, args.stripePaymentIntentId))
+      .get();
+    if (existingByPi) {
+      return { ok: true, booking: rowToDto(existingByPi) };
+    }
+
+    // Conflict check: any active (held/pending hold, or confirmed) booking
+    // that overlaps this slot in the same space blocks us.
+    const start = new Date(args.start).getTime();
+    const end = new Date(args.end).getTime();
+    if (!(end > start)) {
+      return {
+        ok: false,
+        conflict: true,
+        reason: "Invalid time range on the PaymentIntent metadata.",
+      };
+    }
+    const existing = db.select().from(bookings).all();
+    const blocker = existing.find((b) => {
+      if (b.spaceId !== args.spaceId) return false;
+      if (b.status === "rejected") return false;
+      if ((b.status === "held" || b.status === "pending") && !b.holdActive)
+        return false;
+      const bs = new Date(b.start).getTime();
+      const be = new Date(b.end).getTime();
+      return bs < end && be > start;
+    });
+    if (blocker) {
+      return {
+        ok: false,
+        conflict: true,
+        reason: `Slot ${args.spaceId} ${args.start}–${args.end} already booked by ${blocker.id} (status=${blocker.status}).`,
+      };
+    }
+
+    // Google Calendar conflict check (peerspace / giggster sync via shared cal).
+    if (isCalendarLiveForSpace(args.spaceId)) {
+      const gc = await listEventsForSpace(
+        args.spaceId,
+        new Date(start),
+        new Date(end)
+      );
+      if (gc.ok) {
+        const gcBlocker = gc.events.find((ev) => {
+          const bs = new Date(ev.start).getTime();
+          const be = new Date(ev.end).getTime();
+          return bs < end && be > start;
+        });
+        if (gcBlocker) {
+          return {
+            ok: false,
+            conflict: true,
+            reason: `Slot blocked by external calendar event ${gcBlocker.id} (${gcBlocker.summary ?? "no summary"}).`,
+          };
+        }
+      } else if (gc.reason === "error") {
+        console.warn(
+          `[storage] Google Calendar conflict check failed during PI confirm (allowing booking): ${gc.error}`
+        );
+      }
+    }
+
+    // Resolve addons server-side from the live catalog.
+    const resolvedAddons: SelectedAddOn[] = [];
+    if (args.addons.length > 0) {
+      const catalog = db
+        .select()
+        .from(addOnCatalog)
+        .where(eq(addOnCatalog.active, true))
+        .all();
+      const byId = new Map(catalog.map((c) => [c.id, c]));
+      for (const a of args.addons) {
+        const item = byId.get(a.addOnId);
+        if (!item) continue;
+        const lineTotal = computeAddOnLineTotal(item, a.quantity);
+        resolvedAddons.push({
+          addOnId: item.id,
+          name: item.name,
+          price: item.price,
+          priceType: item.priceType as SelectedAddOn["priceType"],
+          quantity: a.quantity,
+          lineTotal,
+        });
+      }
+    }
+
+    const id = `bkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const now = Date.now();
+    const row: BookingRow = {
+      id,
+      spaceId: args.spaceId,
+      activityId: args.activityId,
+      start: args.start,
+      end: args.end,
+      status: "confirmed",
+      guestFirstName: args.guest.firstName,
+      guestLastName: args.guest.lastName,
+      guestEmail: args.guest.email,
+      guestPhone: args.guest.phone ?? null,
+      guestCount: args.guestCount,
+      alcohol: args.alcohol,
+      addons: JSON.stringify(resolvedAddons),
+      holdExpiresAt: null,
+      holdActive: false,
+      reminderSentAt: null,
+      googleEventId: null,
+      googleCalendarId: null,
+      paymentMethod: "card",
+      cardFeeAmount: args.cardFeeAmount,
+      paidAt: args.paidAt,
+      stripePaymentIntentId: args.stripePaymentIntentId,
+      createdAt: now,
+      source: "internal",
+    };
+    db.insert(bookings).values(row).run();
+    return { ok: true, booking: rowToDto(row) };
   }
 
   async purgePrototypeSeedBookings(): Promise<number> {

@@ -164,29 +164,18 @@ export default function BookPage() {
       });
       setHeldBooking(b);
       setHeldBreakdown(breakdown);
-      setStripeIntent(null);
       setStripeError(null);
+      // The server now returns the Stripe PaymentIntent data inline on the
+      // booking response when paymentMethod === "card" (no separate fetch
+      // needed, no booking row created). Just unwrap it.
+      setStripeIntent(b._stripe ?? null);
       setConfirmOpen(true);
       setSelection(null);
 
-      // For card payments, immediately create a Stripe PaymentIntent so the
-      // Elements form can render in the dialog. Failures here aren't fatal —
-      // the hold is already placed; the customer can retry or switch to Zelle.
-      if (paymentMethod === "card") {
-        try {
-          const intent = await fetchStripeIntentForBooking(b.id);
-          if (intent.ok) {
-            setStripeIntent(intent);
-          } else {
-            setStripeError(intent.error ?? "Could not start card payment.");
-          }
-        } catch (intentErr) {
-          setStripeError(
-            intentErr instanceof Error
-              ? intentErr.message
-              : "Could not start card payment."
-          );
-        }
+      if (paymentMethod === "card" && !b._stripe) {
+        setStripeError(
+          "Could not start card payment. Please refresh and try again, or pick Zelle."
+        );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Could not place hold.";
@@ -779,18 +768,22 @@ export default function BookPage() {
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" data-testid="dialog-confirm">
           <DialogHeader>
-            <div className="text-eyebrow text-primary mb-1.5">Hold confirmed</div>
+            <div className="text-eyebrow text-primary mb-1.5">
+              {heldBooking?.paymentMethod === "card"
+                ? "One step left"
+                : "Hold confirmed"}
+            </div>
             <DialogTitle className="tracking-tight">
               {heldBooking?.paymentMethod === "card"
-                ? "Enter your card to lock in your booking"
+                ? "Pay by card to confirm your booking"
                 : "Send payment via Zelle to lock in your booking"}
             </DialogTitle>
             <DialogDescription className="leading-relaxed pt-1">
               {heldBooking?.paymentMethod === "card" ? (
                 <>
-                  We've placed a {HOLD_DURATION_MINUTES}-minute hold. Pay below to
-                  confirm your booking — you'll receive a confirmation email as
-                  soon as the charge settles.
+                  Enter your card details below. Your booking is confirmed the
+                  moment the payment clears, and you'll receive a confirmation
+                  email right after.
                 </>
               ) : (
                 <>
@@ -915,8 +908,9 @@ export default function BookPage() {
 
           <CancellationPolicyNotice compact />
 
-          {/* Hold timer */}
-          {heldBooking?.holdExpiresAt && (
+          {/* Hold timer — only for Zelle. Card payments are instant so a
+              countdown would be misleading. */}
+          {heldBooking?.paymentMethod !== "card" && heldBooking?.holdExpiresAt && (
             <div className="mt-2 flex items-center justify-between text-xs px-1">
               <span className="text-muted-foreground">Hold expires in</span>
               <span className="font-mono tabular-nums" data-testid="text-hold-timer">

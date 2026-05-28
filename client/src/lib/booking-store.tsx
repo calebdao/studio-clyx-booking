@@ -31,7 +31,7 @@ type BookingCtx = {
   now: Date; // ticks every 30s for hold expiry display
   createHoldAsync: (
     input: CreateHoldClientInput
-  ) => Promise<Booking>;
+  ) => Promise<Booking & { _stripe?: StripeIntentResult }>;
   confirmPaymentAsync: (id: string) => Promise<ConfirmResult>;
   releaseHoldAsync: (id: string) => Promise<void>;
   rejectBookingAsync: (id: string) => Promise<void>;
@@ -100,7 +100,10 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
   const createHoldMutation = useMutation({
     mutationFn: async (input: CreateHoldClientInput) => {
       const res = await apiRequest("POST", "/api/bookings", input);
-      return (await res.json()) as Booking;
+      // For card bookings the server returns the synthetic booking with the
+      // Stripe PaymentIntent details attached as `_stripe`. Zelle bookings
+      // return the real booking row with no `_stripe` field.
+      return (await res.json()) as Booking & { _stripe?: StripeIntentResult };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY });

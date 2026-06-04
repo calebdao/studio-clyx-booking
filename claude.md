@@ -62,8 +62,7 @@ GOOGLE_CALENDAR_ID_LINCOLN_APARTMENT=c_7d7a0b0429abd791bf2a787b3ebbbc60c6cae1ff4
 AGENT_ENABLED=true
 ANTHROPIC_API_KEY=<secret>
 AGENT_MODEL=claude-sonnet-4-6
-AGENT_INBOUND_SIGNING_SECRET=<resend inbound svix secret>
-# Replies are sent from the Gmail linked to Peerspace (so Peerspace threads them):
+# The linked Gmail reads inbound Peerspace mail (IMAP) AND sends replies (SMTP):
 GMAIL_USER=calebandgladys@gmail.com
 GMAIL_APP_PASSWORD=<gmail app password>
 ```
@@ -233,7 +232,7 @@ Important caveat: SQLite on Render’s filesystem is not ideal long-term. The ne
 - `ENV_SETUP.md` — env setup and deployment notes.
 - `PRICING_ADDONS_HANDOFF.md` — detailed handoff for latest pricing/add-ons update.
 - `server/agent.ts` — Peerspace email-reply agent: Claude draft generation, knowledge-base load, booking matching.
-- `server/agent-inbound.ts` — inbound webhook signature verification (Svix/Resend) + payload normalization.
+- `server/gmail-inbound.ts` — Gmail IMAP poller (imapflow + mailparser); reads inbound Peerspace mail and feeds the agent pipeline.
 - `server/gmail.ts` — Gmail SMTP sender (nodemailer) for agent replies; sends from the Peerspace-linked Gmail.
 - `docs/agent-knowledge.md` — customer-facing knowledge base the agent answers from (edit to change replies; no code change).
 - `AGENT_HANDOFF.md` — full handoff for the email-reply agent (setup order, env, schema, flow).

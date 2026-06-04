@@ -32,11 +32,11 @@ import {
   stripeStatus,
 } from "./stripe";
 import { sendSlotTakenRefundEmail } from "./integrations";
+import { agentStatus } from "./agent";
 import {
-  parseInboundEmail,
-  verifyInboundSignature,
-} from "./agent-inbound";
-import { agentStatus, generateDraftForConversation } from "./agent";
+  gmailInboundStatus,
+  startGmailInboundPoller,
+} from "./gmail-inbound";
 import {
   isCalendarLiveForSpace,
   listEventsForSpace,
@@ -77,19 +77,6 @@ function httpError(status: number, message: string) {
   const e = new Error(message) as Error & { status?: number };
   e.status = status;
   return e;
-}
-
-// Lightweight, dependency-free fixed-window rate limiter for the unauthenticated
-// inbound-email webhook. This mailbox is low-volume, so a single global cap is
-// enough to blunt a flood without pulling in express-rate-limit.
-const inboundHits: number[] = [];
-function inboundRateLimited(maxPerMinute = 60): boolean {
-  const now = Date.now();
-  const cutoff = now - 60_000;
-  while (inboundHits.length && inboundHits[0] < cutoff) inboundHits.shift();
-  if (inboundHits.length >= maxPerMinute) return true;
-  inboundHits.push(now);
-  return false;
 }
 
 // Local activity rate table — kept in sync with server/integrations.ts and
@@ -227,6 +214,11 @@ export async function registerRoutes(
       }
     },
   });
+
+  // Start the Peerspace email-reply agent's Gmail IMAP poller (reads inbound
+  // Peerspace messages from the linked Gmail). No-op unless AGENT_ENABLED and
+  // GMAIL_USER/GMAIL_APP_PASSWORD are set.
+  startGmailInboundPoller();
 
   // ----- Bookings -----
   app.get("/api/bookings", async (_req, res, next) => {
@@ -777,72 +769,11 @@ export async function registerRoutes(
   });
 
   // ----- Peerspace email-reply agent -----
-
-  // Inbound webhook: Resend Inbound POSTs a parsed Peerspace notification email
-  // here. We verify the Svix signature against the raw body (captured by
-  // express.json's verify callback in server/index.ts), normalize the payload,
-  // group it into a conversation by the Peerspace Reply-To thread token, store
-  // the inbound message, then ask Claude to draft a reply for operator review.
-  app.post("/api/agent/inbound-email", async (req, res, next) => {
-    try {
-      if (inboundRateLimited()) {
-        console.warn("[agent] inbound email rate limit hit; dropping request");
-        return res.status(429).json({ ok: false, error: "rate limited" });
-      }
-      const verification = verifyInboundSignature({
-        rawBody: (req as unknown as { rawBody?: Buffer }).rawBody,
-        headers: req.headers as Record<string, string | string[] | undefined>,
-      });
-      if (!verification.ok) {
-        console.error(
-          `[agent] inbound signature verification failed: ${verification.error}`
-        );
-        return res.status(401).json({ ok: false, error: verification.error });
-      }
-
-      const parsed = parseInboundEmail(req.body);
-      if (!parsed.threadToken) {
-        // No usable Reply-To/From — can't thread it. Ack so the provider stops
-        // retrying, but record nothing.
-        console.warn(
-          "[agent] inbound email had no resolvable thread token; skipping"
-        );
-        return res.json({ ok: true, skipped: "no-thread-token" });
-      }
-
-      const { conversation, message, duplicate } =
-        await storage.recordInboundEmail({
-          threadToken: parsed.threadToken,
-          peerspaceReplyTo: parsed.replyTo,
-          guestName: parsed.fromName,
-          guestEmail: parsed.guestEmail,
-          subject: parsed.subject,
-          fromAddress: parsed.fromAddress,
-          toAddress: parsed.toAddress,
-          bodyText: parsed.bodyText,
-          bodyHtml: parsed.bodyHtml,
-          providerMessageId: parsed.providerMessageId,
-          rawJson: JSON.stringify(req.body ?? null),
-        });
-
-      if (duplicate) {
-        console.log(
-          `[agent] duplicate inbound message ${parsed.providerMessageId} for conversation ${conversation.id}; acking`
-        );
-        return res.json({ ok: true, duplicate: true });
-      }
-
-      // Ack the webhook immediately, then draft the reply in the background so
-      // a slow Claude call never makes the provider time out and retry.
-      void generateDraftForConversation(conversation.id, message.id).catch(
-        (e) => console.error("[agent] background draft generation error", e)
-      );
-
-      res.json({ ok: true, conversationId: conversation.id });
-    } catch (e) {
-      next(e);
-    }
-  });
+  //
+  // Inbound is handled by the Gmail IMAP poller (server/gmail-inbound.ts),
+  // started below in startGmailInboundPoller() — it reads Peerspace emails from
+  // the linked Gmail and feeds them into storage + Claude. The admin Inbox
+  // endpoints here let an operator review/approve the drafts it produces.
 
   // Admin Inbox: list every conversation with its full message + draft history.
   app.get(
@@ -960,6 +891,7 @@ export async function registerRoutes(
       stripe: stripeStatus(),
       agent: agentStatus(),
       gmail: gmailStatus(),
+      gmailInbound: gmailInboundStatus(),
     });
   });
 

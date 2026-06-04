@@ -50,14 +50,16 @@ AGENT_ENABLED=true
 ANTHROPIC_API_KEY=                    # e.g. sk-ant-xxxxxxxx (set on host)
 # Claude model used for drafting. Defaults to claude-sonnet-4-6 when unset.
 AGENT_MODEL=claude-sonnet-4-6
-# Resend Inbound webhook signing secret (Svix). Without it, inbound emails are
-# accepted UNVERIFIED (simulation) — set it in production. whsec_...
-AGENT_INBOUND_SIGNING_SECRET=
-# Gmail account linked to Peerspace — approved replies are SENT from here via
-# SMTP so Peerspace recognizes the host. Requires 2-Step Verification + an app
-# password (NOT the normal login password). Without both, replies simulate.
+# Gmail account linked to Peerspace. Used for BOTH reading inbound Peerspace
+# emails (IMAP poller) and sending approved replies (SMTP). Requires 2-Step
+# Verification + an app password (NOT the login password) and IMAP enabled in
+# Gmail settings. Without both, the poller is off and replies simulate.
 GMAIL_USER=calebandgladys@gmail.com
 GMAIL_APP_PASSWORD=                   # 16-char Gmail app password (set on host)
+# Optional inbound-poller tuning (sensible defaults shown):
+# PEERSPACE_SENDER_MATCH=peerspace.com  # From-header substring that flags Peerspace mail
+# AGENT_INBOX_FOLDER=INBOX              # mailbox/label to read
+# AGENT_POLL_SECONDS=60                 # poll interval (min 30)
 # Optional: override the knowledge-base path (defaults to docs/agent-knowledge.md).
 # AGENT_KNOWLEDGE_PATH=
 ```

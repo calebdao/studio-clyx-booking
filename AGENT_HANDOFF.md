@@ -82,6 +82,7 @@ GMAIL_APP_PASSWORD=…                      # 16-char Gmail app password; unset 
 # PEERSPACE_SENDER_MATCH=peerspace.com   # From-header substring that flags Peerspace mail
 # AGENT_INBOX_FOLDER=INBOX               # mailbox/label to read
 # AGENT_POLL_SECONDS=60                  # poll interval (min 30)
+# AGENT_MAX_PER_POLL=5                   # max emails per poll (bounds memory; backlog drains over polls)
 # AGENT_KNOWLEDGE_PATH=…                 # override docs/agent-knowledge.md path
 ```
 

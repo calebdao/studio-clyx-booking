@@ -41,6 +41,25 @@ GOOGLE_CALENDAR_ID_STUDIO_1=info@calebgladys.com
 GOOGLE_CALENDAR_ID_STUDIO_2=c_a5772f8a4a7b236c16fcad361fb47b876a73968e392a404579f34a6ca1377ccf@group.calendar.google.com
 GOOGLE_CALENDAR_ID_STUDIO_3=c_69f2a0aaf2a68a43b034b44d2b69cec143ebacfd5629a536a4021fbc0506f7fd@group.calendar.google.com
 GOOGLE_CALENDAR_ID_LINCOLN_APARTMENT=c_7d7a0b0429abd791bf2a787b3ebbbc60c6cae1ff4c12e7216db2335923249226@group.calendar.google.com
+
+# ---- Peerspace email-reply agent ----
+# Master kill switch. The agent only drafts replies when this is exactly "true".
+AGENT_ENABLED=true
+# Anthropic API key for Claude (drafting). Without it, the agent runs in
+# simulation mode (placeholder draft text). https://console.anthropic.com
+ANTHROPIC_API_KEY=                    # e.g. sk-ant-xxxxxxxx (set on host)
+# Claude model used for drafting. Defaults to claude-sonnet-4-6 when unset.
+AGENT_MODEL=claude-sonnet-4-6
+# Resend Inbound webhook signing secret (Svix). Without it, inbound emails are
+# accepted UNVERIFIED (simulation) — set it in production. whsec_...
+AGENT_INBOUND_SIGNING_SECRET=
+# Gmail account linked to Peerspace — approved replies are SENT from here via
+# SMTP so Peerspace recognizes the host. Requires 2-Step Verification + an app
+# password (NOT the normal login password). Without both, replies simulate.
+GMAIL_USER=calebandgladys@gmail.com
+GMAIL_APP_PASSWORD=                   # 16-char Gmail app password (set on host)
+# Optional: override the knowledge-base path (defaults to docs/agent-knowledge.md).
+# AGENT_KNOWLEDGE_PATH=
 ```
 
 A copy with safe placeholders also lives in `.env.example`.

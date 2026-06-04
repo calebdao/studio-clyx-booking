@@ -1,4 +1,11 @@
-import { users, bookings, addOnCatalog } from "@shared/schema";
+import {
+  users,
+  bookings,
+  addOnCatalog,
+  agentConversations,
+  agentMessages,
+  agentDrafts,
+} from "@shared/schema";
 import {
   computeCardSurcharge,
   GUEST_TIER_15_RATE,
@@ -19,6 +26,12 @@ import type {
   CreateAddOnInput,
   UpdateAddOnInput,
   SelectedAddOn,
+  AgentConversationRow,
+  AgentMessageRow,
+  AgentDraftRow,
+  AgentConversationDto,
+  AgentMessageDto,
+  AgentDraftDto,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -85,6 +98,56 @@ sqlite.exec(`
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS agent_conversations (
+    id TEXT PRIMARY KEY,
+    thread_token TEXT NOT NULL UNIQUE,
+    peerspace_reply_to TEXT,
+    guest_name TEXT,
+    guest_email TEXT,
+    booking_id TEXT,
+    subject TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS agent_messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    from_address TEXT,
+    to_address TEXT,
+    subject TEXT,
+    body_text TEXT,
+    body_html TEXT,
+    provider_message_id TEXT,
+    raw_json TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS agent_drafts (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    inbound_message_id TEXT NOT NULL,
+    proposed_subject TEXT,
+    proposed_body_text TEXT,
+    proposed_body_html TEXT,
+    edited_body TEXT,
+    model TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reviewed_by TEXT,
+    reviewed_at INTEGER,
+    sent_at INTEGER,
+    resend_id TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_agent_messages_conversation
+    ON agent_messages (conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_messages_provider
+    ON agent_messages (provider_message_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_drafts_conversation
+    ON agent_drafts (conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_drafts_status
+    ON agent_drafts (status);
 `);
 
 // ----- Idempotent ALTER TABLE for upgrade from older schema versions -----
@@ -186,6 +249,59 @@ function rowToAddOnDto(r: AddOnCatalogRow): AddOnDto {
     quantityAvailable: r.quantityAvailable ?? undefined,
     active: Boolean(r.active),
     sortOrder: r.sortOrder ?? 0,
+  };
+}
+
+function agentMessageRowToDto(r: AgentMessageRow): AgentMessageDto {
+  return {
+    id: r.id,
+    conversationId: r.conversationId,
+    direction: r.direction as AgentMessageDto["direction"],
+    fromAddress: r.fromAddress ?? undefined,
+    toAddress: r.toAddress ?? undefined,
+    subject: r.subject ?? undefined,
+    bodyText: r.bodyText ?? undefined,
+    bodyHtml: r.bodyHtml ?? undefined,
+    createdAt: r.createdAt,
+  };
+}
+
+function agentDraftRowToDto(r: AgentDraftRow): AgentDraftDto {
+  return {
+    id: r.id,
+    conversationId: r.conversationId,
+    inboundMessageId: r.inboundMessageId,
+    proposedSubject: r.proposedSubject ?? undefined,
+    proposedBodyText: r.proposedBodyText ?? undefined,
+    editedBody: r.editedBody ?? undefined,
+    model: r.model ?? undefined,
+    status: r.status as AgentDraftDto["status"],
+    reviewedAt: r.reviewedAt ?? undefined,
+    sentAt: r.sentAt ?? undefined,
+    resendId: r.resendId ?? undefined,
+    error: r.error ?? undefined,
+    createdAt: r.createdAt,
+  };
+}
+
+function agentConversationRowToDto(
+  r: AgentConversationRow,
+  messages: AgentMessageRow[],
+  drafts: AgentDraftRow[]
+): AgentConversationDto {
+  return {
+    id: r.id,
+    threadToken: r.threadToken,
+    peerspaceReplyTo: r.peerspaceReplyTo ?? undefined,
+    guestName: r.guestName ?? undefined,
+    guestEmail: r.guestEmail ?? undefined,
+    bookingId: r.bookingId ?? undefined,
+    subject: r.subject ?? undefined,
+    status: r.status as AgentConversationDto["status"],
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    messages: messages.map(agentMessageRowToDto),
+    drafts: drafts.map(agentDraftRowToDto),
   };
 }
 
@@ -303,6 +419,74 @@ export interface IStorage {
   setAddOnActive(id: string, active: boolean): Promise<AddOnDto | undefined>;
   deleteAddOn(id: string): Promise<boolean>;
   seedAddOnCatalogIfEmpty(): Promise<number>;
+  // ----- Peerspace email-reply agent -----
+  // Record an inbound email: upsert the conversation by thread token and insert
+  // the message. Idempotent on the provider message id (Resend retries / Gmail
+  // double-forwards). Returns the conversation + message and whether it was a dup.
+  recordInboundEmail(args: {
+    threadToken: string;
+    peerspaceReplyTo?: string | null;
+    guestName?: string | null;
+    guestEmail?: string | null;
+    subject?: string | null;
+    fromAddress?: string | null;
+    toAddress?: string | null;
+    bodyText?: string | null;
+    bodyHtml?: string | null;
+    providerMessageId?: string | null;
+    rawJson?: string | null;
+  }): Promise<{
+    conversation: AgentConversationRow;
+    message: AgentMessageRow;
+    duplicate: boolean;
+  }>;
+  addAgentMessage(args: {
+    conversationId: string;
+    direction: "inbound" | "outbound";
+    fromAddress?: string | null;
+    toAddress?: string | null;
+    subject?: string | null;
+    bodyText?: string | null;
+    bodyHtml?: string | null;
+    providerMessageId?: string | null;
+    rawJson?: string | null;
+  }): Promise<AgentMessageRow>;
+  setConversationBooking(
+    conversationId: string,
+    bookingId: string | null
+  ): Promise<void>;
+  setConversationStatus(
+    conversationId: string,
+    status: "open" | "closed"
+  ): Promise<void>;
+  createAgentDraft(args: {
+    conversationId: string;
+    inboundMessageId: string;
+    proposedSubject?: string | null;
+    proposedBodyText?: string | null;
+    proposedBodyHtml?: string | null;
+    model?: string | null;
+    status?: AgentDraftRow["status"];
+    error?: string | null;
+  }): Promise<AgentDraftRow>;
+  getAgentDraft(id: string): Promise<AgentDraftRow | undefined>;
+  updateAgentDraft(
+    id: string,
+    patch: Partial<
+      Pick<
+        AgentDraftRow,
+        | "status"
+        | "editedBody"
+        | "reviewedBy"
+        | "reviewedAt"
+        | "sentAt"
+        | "resendId"
+        | "error"
+      >
+    >
+  ): Promise<AgentDraftRow | undefined>;
+  listAgentConversations(): Promise<AgentConversationDto[]>;
+  getAgentConversation(id: string): Promise<AgentConversationDto | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -885,6 +1069,251 @@ export class DatabaseStorage implements IStorage {
       inserted++;
     });
     return inserted;
+  }
+
+  // ----- Peerspace email-reply agent -----
+
+  async addAgentMessage(args: {
+    conversationId: string;
+    direction: "inbound" | "outbound";
+    fromAddress?: string | null;
+    toAddress?: string | null;
+    subject?: string | null;
+    bodyText?: string | null;
+    bodyHtml?: string | null;
+    providerMessageId?: string | null;
+    rawJson?: string | null;
+  }): Promise<AgentMessageRow> {
+    const id = `amsg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const row: AgentMessageRow = {
+      id,
+      conversationId: args.conversationId,
+      direction: args.direction,
+      fromAddress: args.fromAddress ?? null,
+      toAddress: args.toAddress ?? null,
+      subject: args.subject ?? null,
+      bodyText: args.bodyText ?? null,
+      bodyHtml: args.bodyHtml ?? null,
+      providerMessageId: args.providerMessageId ?? null,
+      rawJson: args.rawJson ?? null,
+      createdAt: Date.now(),
+    };
+    db.insert(agentMessages).values(row).run();
+    // Bump the parent conversation's updatedAt so the Inbox sorts by activity.
+    db.update(agentConversations)
+      .set({ updatedAt: row.createdAt })
+      .where(eq(agentConversations.id, args.conversationId))
+      .run();
+    return row;
+  }
+
+  async recordInboundEmail(args: {
+    threadToken: string;
+    peerspaceReplyTo?: string | null;
+    guestName?: string | null;
+    guestEmail?: string | null;
+    subject?: string | null;
+    fromAddress?: string | null;
+    toAddress?: string | null;
+    bodyText?: string | null;
+    bodyHtml?: string | null;
+    providerMessageId?: string | null;
+    rawJson?: string | null;
+  }): Promise<{
+    conversation: AgentConversationRow;
+    message: AgentMessageRow;
+    duplicate: boolean;
+  }> {
+    // Upsert the conversation keyed by the Peerspace Reply-To thread token.
+    let conversation = db
+      .select()
+      .from(agentConversations)
+      .where(eq(agentConversations.threadToken, args.threadToken))
+      .get();
+    const now = Date.now();
+    if (!conversation) {
+      const convo: AgentConversationRow = {
+        id: `aconv-${now}-${Math.random().toString(36).slice(2, 7)}`,
+        threadToken: args.threadToken,
+        peerspaceReplyTo: args.peerspaceReplyTo ?? null,
+        guestName: args.guestName ?? null,
+        guestEmail: args.guestEmail ?? null,
+        bookingId: null,
+        subject: args.subject ?? null,
+        status: "open",
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.insert(agentConversations).values(convo).run();
+      conversation = convo;
+    } else {
+      // Backfill any fields we now know but didn't before; reopen if closed.
+      const set: Partial<AgentConversationRow> = { updatedAt: now };
+      if (!conversation.peerspaceReplyTo && args.peerspaceReplyTo)
+        set.peerspaceReplyTo = args.peerspaceReplyTo;
+      if (!conversation.guestName && args.guestName)
+        set.guestName = args.guestName;
+      if (!conversation.guestEmail && args.guestEmail)
+        set.guestEmail = args.guestEmail;
+      if (!conversation.subject && args.subject) set.subject = args.subject;
+      if (conversation.status === "closed") set.status = "open";
+      db.update(agentConversations)
+        .set(set)
+        .where(eq(agentConversations.id, conversation.id))
+        .run();
+      conversation = { ...conversation, ...set };
+    }
+
+    // Idempotency: if we've already stored a message with this provider id for
+    // this conversation, return it without inserting a duplicate.
+    if (args.providerMessageId) {
+      const dup = db
+        .select()
+        .from(agentMessages)
+        .where(
+          and(
+            eq(agentMessages.conversationId, conversation.id),
+            eq(agentMessages.providerMessageId, args.providerMessageId)
+          )
+        )
+        .get();
+      if (dup) {
+        return { conversation, message: dup, duplicate: true };
+      }
+    }
+
+    const message = await this.addAgentMessage({
+      conversationId: conversation.id,
+      direction: "inbound",
+      fromAddress: args.fromAddress ?? null,
+      toAddress: args.toAddress ?? null,
+      subject: args.subject ?? null,
+      bodyText: args.bodyText ?? null,
+      bodyHtml: args.bodyHtml ?? null,
+      providerMessageId: args.providerMessageId ?? null,
+      rawJson: args.rawJson ?? null,
+    });
+    return { conversation, message, duplicate: false };
+  }
+
+  async setConversationBooking(conversationId: string, bookingId: string | null) {
+    db.update(agentConversations)
+      .set({ bookingId, updatedAt: Date.now() })
+      .where(eq(agentConversations.id, conversationId))
+      .run();
+  }
+
+  async setConversationStatus(
+    conversationId: string,
+    status: "open" | "closed"
+  ) {
+    db.update(agentConversations)
+      .set({ status, updatedAt: Date.now() })
+      .where(eq(agentConversations.id, conversationId))
+      .run();
+  }
+
+  async createAgentDraft(args: {
+    conversationId: string;
+    inboundMessageId: string;
+    proposedSubject?: string | null;
+    proposedBodyText?: string | null;
+    proposedBodyHtml?: string | null;
+    model?: string | null;
+    status?: AgentDraftRow["status"];
+    error?: string | null;
+  }): Promise<AgentDraftRow> {
+    const id = `adraft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const row: AgentDraftRow = {
+      id,
+      conversationId: args.conversationId,
+      inboundMessageId: args.inboundMessageId,
+      proposedSubject: args.proposedSubject ?? null,
+      proposedBodyText: args.proposedBodyText ?? null,
+      proposedBodyHtml: args.proposedBodyHtml ?? null,
+      editedBody: null,
+      model: args.model ?? null,
+      status: args.status ?? "pending",
+      reviewedBy: null,
+      reviewedAt: null,
+      sentAt: null,
+      resendId: null,
+      error: args.error ?? null,
+      createdAt: Date.now(),
+    };
+    db.insert(agentDrafts).values(row).run();
+    return row;
+  }
+
+  async getAgentDraft(id: string): Promise<AgentDraftRow | undefined> {
+    return db.select().from(agentDrafts).where(eq(agentDrafts.id, id)).get();
+  }
+
+  async updateAgentDraft(
+    id: string,
+    patch: Partial<
+      Pick<
+        AgentDraftRow,
+        | "status"
+        | "editedBody"
+        | "reviewedBy"
+        | "reviewedAt"
+        | "sentAt"
+        | "resendId"
+        | "error"
+      >
+    >
+  ): Promise<AgentDraftRow | undefined> {
+    const row = db.select().from(agentDrafts).where(eq(agentDrafts.id, id)).get();
+    if (!row) return undefined;
+    if (Object.keys(patch).length > 0) {
+      db.update(agentDrafts).set(patch).where(eq(agentDrafts.id, id)).run();
+    }
+    return db.select().from(agentDrafts).where(eq(agentDrafts.id, id)).get();
+  }
+
+  async listAgentConversations(): Promise<AgentConversationDto[]> {
+    const convos = db.select().from(agentConversations).all();
+    convos.sort((a, b) => b.updatedAt - a.updatedAt);
+    return convos.map((c) => {
+      const messages = db
+        .select()
+        .from(agentMessages)
+        .where(eq(agentMessages.conversationId, c.id))
+        .all()
+        .sort((a, b) => a.createdAt - b.createdAt);
+      const drafts = db
+        .select()
+        .from(agentDrafts)
+        .where(eq(agentDrafts.conversationId, c.id))
+        .all()
+        .sort((a, b) => a.createdAt - b.createdAt);
+      return agentConversationRowToDto(c, messages, drafts);
+    });
+  }
+
+  async getAgentConversation(
+    id: string
+  ): Promise<AgentConversationDto | undefined> {
+    const c = db
+      .select()
+      .from(agentConversations)
+      .where(eq(agentConversations.id, id))
+      .get();
+    if (!c) return undefined;
+    const messages = db
+      .select()
+      .from(agentMessages)
+      .where(eq(agentMessages.conversationId, id))
+      .all()
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const drafts = db
+      .select()
+      .from(agentDrafts)
+      .where(eq(agentDrafts.conversationId, id))
+      .all()
+      .sort((a, b) => a.createdAt - b.createdAt);
+    return agentConversationRowToDto(c, messages, drafts);
   }
 }
 

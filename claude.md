@@ -57,9 +57,18 @@ GOOGLE_CALENDAR_ID_STUDIO_1=info@calebgladys.com
 GOOGLE_CALENDAR_ID_STUDIO_2=c_a5772f8a4a7b236c16fcad361fb47b876a73968e392a404579f34a6ca1377ccf@group.calendar.google.com
 GOOGLE_CALENDAR_ID_STUDIO_3=c_69f2a0aaf2a68a43b034b44d2b69cec143ebacfd5629a536a4021fbc0506f7fd@group.calendar.google.com
 GOOGLE_CALENDAR_ID_LINCOLN_APARTMENT=c_7d7a0b0429abd791bf2a787b3ebbbc60c6cae1ff4c12e7216db2335923249226@group.calendar.google.com
+
+# Peerspace email-reply agent (see AGENT_HANDOFF.md)
+AGENT_ENABLED=true
+ANTHROPIC_API_KEY=<secret>
+AGENT_MODEL=claude-sonnet-4-6
+AGENT_INBOUND_SIGNING_SECRET=<resend inbound svix secret>
+# Replies are sent from the Gmail linked to Peerspace (so Peerspace threads them):
+GMAIL_USER=calebandgladys@gmail.com
+GMAIL_APP_PASSWORD=<gmail app password>
 ```
 
-`GET /api/integrations/status` is the quick health check. It should report live status for Resend and Google Calendar when Render env vars are correctly configured.
+`GET /api/integrations/status` is the quick health check. It should report live status for Resend, Google Calendar, Stripe, and the agent when Render env vars are correctly configured.
 
 ## Core booking rules
 
@@ -223,6 +232,11 @@ Important caveat: SQLite on Render’s filesystem is not ideal long-term. The ne
 - `.env.example` — safe env placeholders.
 - `ENV_SETUP.md` — env setup and deployment notes.
 - `PRICING_ADDONS_HANDOFF.md` — detailed handoff for latest pricing/add-ons update.
+- `server/agent.ts` — Peerspace email-reply agent: Claude draft generation, knowledge-base load, booking matching.
+- `server/agent-inbound.ts` — inbound webhook signature verification (Svix/Resend) + payload normalization.
+- `server/gmail.ts` — Gmail SMTP sender (nodemailer) for agent replies; sends from the Peerspace-linked Gmail.
+- `docs/agent-knowledge.md` — customer-facing knowledge base the agent answers from (edit to change replies; no code change).
+- `AGENT_HANDOFF.md` — full handoff for the email-reply agent (setup order, env, schema, flow).
 
 ## Suggested next improvements
 

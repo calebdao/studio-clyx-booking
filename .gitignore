@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Secrets — never commit real env files (.env.example is the safe template)
+.env
+.env.*
+!.env.example
+
+# SQLite database + WAL sidecars
+data.db
+data.db-shm
+data.db-wal
+*.sqlite
+
+# Logs / OS / editor cruft
+*.log
+.DS_Store
+.vscode/
+.idea/

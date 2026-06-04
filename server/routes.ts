@@ -5,6 +5,7 @@ import {
   createHoldSchema,
   createAddOnSchema,
   updateAddOnSchema,
+  agentDraftActionSchema,
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
   guestSurchargeRate,
@@ -20,6 +21,7 @@ import {
   sendOwnerBookingAlert,
   startHoldExpirySweeper,
 } from "./integrations";
+import { gmailStatus, sendAgentReplyEmail } from "./gmail";
 import {
   constructWebhookEvent,
   createDraftPaymentIntent,
@@ -30,6 +32,11 @@ import {
   stripeStatus,
 } from "./stripe";
 import { sendSlotTakenRefundEmail } from "./integrations";
+import { agentStatus } from "./agent";
+import {
+  gmailInboundStatus,
+  startGmailInboundPoller,
+} from "./gmail-inbound";
 import {
   isCalendarLiveForSpace,
   listEventsForSpace,
@@ -207,6 +214,11 @@ export async function registerRoutes(
       }
     },
   });
+
+  // Start the Peerspace email-reply agent's Gmail IMAP poller (reads inbound
+  // Peerspace messages from the linked Gmail). No-op unless AGENT_ENABLED and
+  // GMAIL_USER/GMAIL_APP_PASSWORD are set.
+  startGmailInboundPoller();
 
   // ----- Bookings -----
   app.get("/api/bookings", async (_req, res, next) => {
@@ -756,9 +768,131 @@ export async function registerRoutes(
     }
   });
 
+  // ----- Peerspace email-reply agent -----
+  //
+  // Inbound is handled by the Gmail IMAP poller (server/gmail-inbound.ts),
+  // started below in startGmailInboundPoller() — it reads Peerspace emails from
+  // the linked Gmail and feeds them into storage + Claude. The admin Inbox
+  // endpoints here let an operator review/approve the drafts it produces.
+
+  // Admin Inbox: list every conversation with its full message + draft history.
+  app.get(
+    "/api/admin/agent/conversations",
+    requireAdmin,
+    async (_req, res, next) => {
+      try {
+        res.json(await storage.listAgentConversations());
+      } catch (e) {
+        next(e);
+      }
+    }
+  );
+
+  // Admin Inbox: act on a draft — approve (send), reject, or save an edit.
+  app.post(
+    "/api/admin/agent/drafts/:id/action",
+    requireAdmin,
+    async (req, res, next) => {
+      try {
+        const { action, editedBody } = agentDraftActionSchema.parse(req.body);
+        const draft = await storage.getAgentDraft(String(req.params.id));
+        if (!draft) throw httpError(404, "Draft not found.");
+        if (draft.status === "sent") {
+          throw httpError(409, "This draft has already been sent.");
+        }
+
+        if (action === "edit") {
+          if (!editedBody) {
+            throw httpError(400, "editedBody is required to edit a draft.");
+          }
+          await storage.updateAgentDraft(draft.id, { editedBody });
+          return res.json({ ok: true });
+        }
+
+        if (action === "reject") {
+          await storage.updateAgentDraft(draft.id, {
+            status: "rejected",
+            reviewedAt: Date.now(),
+          });
+          return res.json({ ok: true });
+        }
+
+        // approve → send the reply back into the Peerspace thread.
+        const convo = await storage.getAgentConversation(draft.conversationId);
+        if (!convo) throw httpError(404, "Conversation not found.");
+        const to = convo.peerspaceReplyTo || convo.threadToken;
+        if (!to) {
+          throw httpError(400, "No Reply-To address on this conversation.");
+        }
+        // Persist a last-second edit passed alongside approve.
+        if (editedBody && editedBody !== draft.editedBody) {
+          await storage.updateAgentDraft(draft.id, { editedBody });
+        }
+        const finalBody =
+          editedBody ?? draft.editedBody ?? draft.proposedBodyText;
+        if (!finalBody) {
+          throw httpError(400, "This draft has no body to send.");
+        }
+        const subject =
+          draft.proposedSubject ??
+          (convo.subject
+            ? /^re:/i.test(convo.subject)
+              ? convo.subject
+              : `Re: ${convo.subject}`
+            : "Re: Your Studio Clyx inquiry");
+
+        const send = await sendAgentReplyEmail({
+          to,
+          subject,
+          text: finalBody,
+          conversationId: convo.id,
+        });
+        if (!send.ok) {
+          const error =
+            ("error" in send && send.error) || "Failed to send reply.";
+          await storage.updateAgentDraft(draft.id, {
+            status: "error",
+            error: String(error),
+          });
+          return res.status(502).json({ ok: false, error });
+        }
+        const resendId =
+          "providerId" in send ? (send.providerId ?? null) : null;
+        // Record the outbound reply in the thread history.
+        await storage.addAgentMessage({
+          conversationId: convo.id,
+          direction: "outbound",
+          fromAddress: process.env.GMAIL_USER || null,
+          toAddress: to,
+          subject,
+          bodyText: finalBody,
+          providerMessageId: resendId,
+        });
+        await storage.updateAgentDraft(draft.id, {
+          status: "sent",
+          sentAt: Date.now(),
+          reviewedAt: Date.now(),
+          resendId,
+        });
+        res.json({ ok: true, simulated: send.mode === "simulation" });
+      } catch (e) {
+        if (e instanceof ZodError) {
+          return next(httpError(400, fromZodError(e).toString()));
+        }
+        next(e);
+      }
+    }
+  );
+
   // ----- Integration status (admin callout) -----
   app.get("/api/integrations/status", (_req, res) => {
-    res.json({ ...integrationsStatus(), stripe: stripeStatus() });
+    res.json({
+      ...integrationsStatus(),
+      stripe: stripeStatus(),
+      agent: agentStatus(),
+      gmail: gmailStatus(),
+      gmailInbound: gmailInboundStatus(),
+    });
   });
 
   return httpServer;

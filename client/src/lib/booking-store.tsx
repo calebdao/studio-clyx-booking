@@ -354,3 +354,93 @@ export async function fetchStripeIntentForBooking(
   );
   return (await res.json()) as StripeIntentResult;
 }
+
+// ----- Peerspace email-reply agent (admin Inbox) -----
+
+export type AgentMessage = {
+  id: string;
+  conversationId: string;
+  direction: "inbound" | "outbound";
+  fromAddress?: string | null;
+  toAddress?: string | null;
+  subject?: string | null;
+  bodyText?: string | null;
+  bodyHtml?: string | null;
+  createdAt: number;
+};
+
+export type AgentDraft = {
+  id: string;
+  conversationId: string;
+  inboundMessageId: string;
+  proposedSubject?: string | null;
+  proposedBodyText?: string | null;
+  editedBody?: string | null;
+  model?: string | null;
+  status: "pending" | "approved" | "rejected" | "sent" | "error";
+  reviewedAt?: number | null;
+  sentAt?: number | null;
+  resendId?: string | null;
+  error?: string | null;
+  createdAt: number;
+};
+
+export type AgentConversation = {
+  id: string;
+  threadToken: string;
+  peerspaceReplyTo?: string | null;
+  guestName?: string | null;
+  guestEmail?: string | null;
+  bookingId?: string | null;
+  subject?: string | null;
+  status: "open" | "closed";
+  createdAt: number;
+  updatedAt: number;
+  messages: AgentMessage[];
+  drafts: AgentDraft[];
+};
+
+const AGENT_CONVERSATIONS_KEY = ["/api/admin/agent/conversations"] as const;
+
+export function useAgentConversations() {
+  const { adminPin } = useAdmin();
+  return useQuery<AgentConversation[]>({
+    queryKey: AGENT_CONVERSATIONS_KEY,
+    enabled: !!adminPin,
+    staleTime: 10_000,
+    // Light polling so newly-drafted replies show up without a manual refresh.
+    refetchInterval: adminPin ? 30_000 : false,
+    queryFn: async () => {
+      const res = await apiRequest(
+        "GET",
+        "/api/admin/agent/conversations",
+        undefined,
+        { headers: { "x-admin-pin": adminPin ?? "" } }
+      );
+      return (await res.json()) as AgentConversation[];
+    },
+  });
+}
+
+export function useAgentDraftActions() {
+  const { adminPin } = useAdmin();
+  const headers = { "x-admin-pin": adminPin ?? "" };
+  return useMutation({
+    mutationFn: async (args: {
+      draftId: string;
+      action: "approve" | "reject" | "edit";
+      editedBody?: string;
+    }) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/admin/agent/drafts/${args.draftId}/action`,
+        { action: args.action, editedBody: args.editedBody },
+        { headers }
+      );
+      return (await res.json()) as { ok: boolean; simulated?: boolean };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: AGENT_CONVERSATIONS_KEY });
+    },
+  });
+}

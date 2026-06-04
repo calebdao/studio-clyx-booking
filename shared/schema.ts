@@ -189,3 +189,114 @@ export const createHoldSchema = z.object({
   paymentMethod: z.enum(["zelle", "card"]).default("zelle"),
 });
 export type CreateHoldInput = z.infer<typeof createHoldSchema>;
+
+// ----- Peerspace email-reply agent -----
+//
+// Inbound Peerspace notification emails are forwarded into Resend Inbound,
+// which POSTs the parsed message to /api/agent/inbound-email. Each Peerspace
+// message thread has a unique Reply-To address; we use that address as the
+// stable thread token to group an entire conversation. Claude drafts a reply
+// (agent_drafts); an operator approves/edits/rejects it in the admin Inbox;
+// on approve we email the reply back to the thread's Reply-To via Resend.
+
+export const agentConversations = sqliteTable("agent_conversations", {
+  id: text("id").primaryKey(),
+  threadToken: text("thread_token").notNull().unique(), // normalized Peerspace Reply-To address
+  peerspaceReplyTo: text("peerspace_reply_to"), // full Reply-To header value
+  guestName: text("guest_name"),
+  guestEmail: text("guest_email"), // may be masked by Peerspace / null
+  bookingId: text("booking_id"), // matched booking, if any (refs bookings.id)
+  subject: text("subject"),
+  status: text("status").notNull().default("open"), // open | closed
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+export type AgentConversationRow = typeof agentConversations.$inferSelect;
+
+export const agentMessages = sqliteTable("agent_messages", {
+  id: text("id").primaryKey(),
+  conversationId: text("conversation_id").notNull(),
+  direction: text("direction").notNull(), // inbound | outbound
+  fromAddress: text("from_address"),
+  toAddress: text("to_address"),
+  subject: text("subject"),
+  bodyText: text("body_text"),
+  bodyHtml: text("body_html"),
+  providerMessageId: text("provider_message_id"), // for inbound dedupe; Resend id for outbound
+  rawJson: text("raw_json"), // original provider payload (inbound) for debugging
+  createdAt: integer("created_at").notNull(),
+});
+export type AgentMessageRow = typeof agentMessages.$inferSelect;
+
+export const agentDrafts = sqliteTable("agent_drafts", {
+  id: text("id").primaryKey(),
+  conversationId: text("conversation_id").notNull(),
+  inboundMessageId: text("inbound_message_id").notNull(),
+  proposedSubject: text("proposed_subject"),
+  proposedBodyText: text("proposed_body_text"),
+  proposedBodyHtml: text("proposed_body_html"),
+  editedBody: text("edited_body"), // operator's edited plain-text override, if any
+  model: text("model"),
+  status: text("status").notNull().default("pending"), // pending | approved | rejected | sent | error
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: integer("reviewed_at"),
+  sentAt: integer("sent_at"),
+  resendId: text("resend_id"),
+  error: text("error"),
+  createdAt: integer("created_at").notNull(),
+});
+export type AgentDraftRow = typeof agentDrafts.$inferSelect;
+
+// DTOs returned by the admin Inbox API.
+export const agentMessageDtoSchema = z.object({
+  id: z.string(),
+  conversationId: z.string(),
+  direction: z.enum(["inbound", "outbound"]),
+  fromAddress: z.string().nullable().optional(),
+  toAddress: z.string().nullable().optional(),
+  subject: z.string().nullable().optional(),
+  bodyText: z.string().nullable().optional(),
+  bodyHtml: z.string().nullable().optional(),
+  createdAt: z.number(),
+});
+export type AgentMessageDto = z.infer<typeof agentMessageDtoSchema>;
+
+export const agentDraftDtoSchema = z.object({
+  id: z.string(),
+  conversationId: z.string(),
+  inboundMessageId: z.string(),
+  proposedSubject: z.string().nullable().optional(),
+  proposedBodyText: z.string().nullable().optional(),
+  editedBody: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  status: z.enum(["pending", "approved", "rejected", "sent", "error"]),
+  reviewedAt: z.number().nullable().optional(),
+  sentAt: z.number().nullable().optional(),
+  resendId: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  createdAt: z.number(),
+});
+export type AgentDraftDto = z.infer<typeof agentDraftDtoSchema>;
+
+export const agentConversationDtoSchema = z.object({
+  id: z.string(),
+  threadToken: z.string(),
+  peerspaceReplyTo: z.string().nullable().optional(),
+  guestName: z.string().nullable().optional(),
+  guestEmail: z.string().nullable().optional(),
+  bookingId: z.string().nullable().optional(),
+  subject: z.string().nullable().optional(),
+  status: z.enum(["open", "closed"]),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  messages: z.array(agentMessageDtoSchema).default([]),
+  drafts: z.array(agentDraftDtoSchema).default([]),
+});
+export type AgentConversationDto = z.infer<typeof agentConversationDtoSchema>;
+
+// Operator action on a draft from the admin Inbox.
+export const agentDraftActionSchema = z.object({
+  action: z.enum(["approve", "reject", "edit"]),
+  editedBody: z.string().trim().min(1).optional(),
+});
+export type AgentDraftAction = z.infer<typeof agentDraftActionSchema>;

@@ -35,6 +35,13 @@ function pollMs(): number {
   const secs = Number(process.env.AGENT_POLL_SECONDS || 60);
   return Math.max(30, Number.isFinite(secs) ? secs : 60) * 1000;
 }
+function maxPerPoll(): number {
+  // Hard cap on messages handled per cycle. Keeps memory bounded so a large
+  // backlog of unread Peerspace mail can't OOM a small (512MB) instance — the
+  // rest drain on later polls.
+  const n = Number(process.env.AGENT_MAX_PER_POLL || 5);
+  return Math.max(1, Number.isFinite(n) ? n : 5);
+}
 
 export function gmailInboundConfigured(): boolean {
   return Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
@@ -51,6 +58,7 @@ export function gmailInboundStatus() {
     folder: inboxFolder(),
     senderMatch: senderMatch(),
     pollSeconds: pollMs() / 1000,
+    maxPerPoll: maxPerPoll(),
   };
 }
 
@@ -114,10 +122,15 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
 
   if (duplicate) return;
 
-  // Draft in the background; gated internally by AGENT_ENABLED.
-  void generateDraftForConversation(conversation.id, message.id).catch((e) =>
-    console.error("[gmail-inbound] background draft generation error", e)
-  );
+  // Draft sequentially (awaited) — NOT fire-and-forget — so a backlog can't fan
+  // out into many concurrent Claude calls + DB scans and exhaust memory. A draft
+  // failure is logged but must not stop us marking the email read upstream
+  // (generateDraftForConversation records its own error draft internally).
+  try {
+    await generateDraftForConversation(conversation.id, message.id);
+  } catch (e) {
+    console.error("[gmail-inbound] draft generation error:", e);
+  }
 }
 
 // One poll cycle: connect, find unread Peerspace mail, ingest, mark read.
@@ -144,7 +157,15 @@ async function pollOnce(): Promise<number> {
         { uid: true }
       );
       if (!uids || uids.length === 0) return 0;
-      for (const uid of uids) {
+      // Process only a bounded batch (oldest first) per cycle to keep memory
+      // flat; the remainder is picked up on the next poll.
+      const batch = uids.slice(0, maxPerPoll());
+      if (uids.length > batch.length) {
+        console.log(
+          `[gmail-inbound] ${uids.length} unread Peerspace email(s) found; handling ${batch.length} this cycle, rest next poll`
+        );
+      }
+      for (const uid of batch) {
         try {
           const msg = await client.fetchOne(
             String(uid),

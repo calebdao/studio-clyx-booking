@@ -21,6 +21,16 @@ Peerspace; this mailbox handles their messages.
 - **Lincoln Apartment** — Curated mid-century two-bedroom apartment with a
   living room, kitchen, natural light, a blush bedroom, and artful details.
 
+## Peerspace listing names
+
+Guests find us under these Peerspace listing names. When an inquiry references a
+listing, map it to the studio below so you describe the right space:
+
+- **Natural Light Minimalist Loft with Modern Furniture** → Studio 1
+- **Designer Minimalist Loft with Modern Furniture** → Studio 2
+- **STUDIO CLYX III / Sunlit Photo & Event Loft with Curated Furniture** → Studio 3
+- **Cosy Mid Century Modern Apartment Home** → Lincoln Apartment
+
 ## Lighting & natural light
 
 - **Studio 1 & Studio 3** — Windows face **East**. They get the most direct

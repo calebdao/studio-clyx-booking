@@ -139,6 +139,66 @@ function findGuestEmailInBody(text: string | null): string | null {
   return candidate ? candidate.toLowerCase() : null;
 }
 
+// Strip Peerspace email boilerplate (header preamble, footer links/legal) and
+// quoted reply history so the stored body is just the guest's message.
+// Conservative on purpose: if stripping would leave almost nothing, we keep the
+// original text rather than risk hiding the message. The exact markers depend on
+// Peerspace's email format — refine `LEAD_MARKERS`/`FOOTER_MARKERS` from a real
+// sample.
+const LEAD_MARKERS = [
+  /sent you a message[^\n]*:?\s*\n/i,
+  /new message from [^\n]+\n/i,
+  /wrote:\s*\n/i,
+  /sent you the following message[^\n]*:?\s*\n/i,
+];
+const FOOTER_MARKERS = [
+  /\n\s*On .+?\bwrote:/i, // quoted reply history
+  /reply (directly )?to this email/i,
+  /view (the )?(conversation|message|thread)/i,
+  /respond to .+ on peerspace/i,
+  /go to your inbox/i,
+  /unsubscribe/i,
+  /manage your (email )?(notification|preference)/i,
+  /this (email|message) was sent/i,
+  /peerspace,? inc/i,
+  /https?:\/\/\S*peerspace\.com/i,
+  /©\s*\d{0,4}\s*peerspace/i,
+  /get the (peerspace )?app/i,
+];
+
+function extractGuestMessage(raw: string | null): string | null {
+  if (!raw) return raw;
+  let text = raw.replace(/\r\n?/g, "\n");
+
+  // Cut everything from the first footer/quoted-history marker onward.
+  let cut = text.length;
+  for (const re of FOOTER_MARKERS) {
+    const i = text.search(re);
+    if (i !== -1 && i < cut) cut = i;
+  }
+  text = text.slice(0, cut);
+
+  // Drop a leading header block ("… sent you a message:" etc.).
+  for (const re of LEAD_MARKERS) {
+    const m = text.match(re);
+    if (m && m.index !== undefined) {
+      text = text.slice(m.index + m[0].length);
+      break;
+    }
+  }
+
+  // Drop quoted ">" lines, collapse blank runs, trim.
+  text = text
+    .split("\n")
+    .filter((l) => !/^\s*>/.test(l))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  // Safety net: don't return an over-stripped result.
+  return text.length >= 3 ? text : raw.trim();
+}
+
 async function ingestRawEmail(source: Buffer): Promise<void> {
   const parsed = await simpleParser(source);
   const from = firstAddress(parsed.from);
@@ -157,16 +217,17 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
   // loading it via SQLite `.all()` is what OOM'd the process. We draft from the
   // plain-text body, which is small.
   const rawText = parsed.text || null;
+  const cleaned = extractGuestMessage(rawText);
   const bodyText =
-    rawText && rawText.length > MAX_BODY_CHARS
-      ? rawText.slice(0, MAX_BODY_CHARS) + "\n…[truncated]"
-      : rawText;
+    cleaned && cleaned.length > MAX_BODY_CHARS
+      ? cleaned.slice(0, MAX_BODY_CHARS) + "\n…[truncated]"
+      : cleaned;
 
   const { conversation, message, duplicate } = await storage.recordInboundEmail({
     threadToken,
     peerspaceReplyTo: replyTo.text || replyTo.address,
     guestName: from.name,
-    guestEmail: findGuestEmailInBody(bodyText),
+    guestEmail: findGuestEmailInBody(rawText),
     subject: parsed.subject || null,
     fromAddress: from.text || from.address,
     toAddress: to.address,

@@ -83,6 +83,8 @@ GMAIL_APP_PASSWORD=…                      # 16-char Gmail app password; unset 
 # AGENT_INBOX_FOLDER=INBOX               # mailbox/label to read
 # AGENT_POLL_SECONDS=60                  # poll interval (min 30)
 # AGENT_MAX_PER_POLL=5                   # max emails per poll (bounds memory; backlog drains over polls)
+# PEERSPACE_IGNORE_SUBJECTS=…            # comma-separated subjects to skip (Peerspace notifications); overrides default list
+# PEERSPACE_MESSAGE_SUBJECTS=…           # stricter allowlist: only draft for subjects containing one of these
 # AGENT_KNOWLEDGE_PATH=…                 # override docs/agent-knowledge.md path
 ```
 

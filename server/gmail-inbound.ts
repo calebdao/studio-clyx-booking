@@ -47,6 +47,51 @@ function maxPerPoll(): number {
 // message; keeps rows (and prompts) small.
 const MAX_BODY_CHARS = 16000;
 
+// Peerspace also emails automated notifications (booking confirmed, payment,
+// review requests, etc.) from the same domain — those are NOT guest messages
+// and shouldn't get a drafted reply. We skip any email whose subject matches one
+// of these phrases. Override the whole list with PEERSPACE_IGNORE_SUBJECTS
+// (comma-separated). Or, for a stricter allowlist, set PEERSPACE_MESSAGE_SUBJECTS
+// and we ONLY process subjects containing one of those.
+const DEFAULT_IGNORE_SUBJECTS = [
+  "is confirmed",
+  "booking confirmed",
+  "booking request",
+  "new booking request",
+  "payment received",
+  "you've been paid",
+  "payout",
+  "receipt",
+  "leave a review",
+  "review your",
+  "how was your",
+  "reminder",
+  "upcoming booking",
+  "has been cancelled",
+  "booking declined",
+  "request expired",
+  "refund",
+];
+
+function csvEnv(name: string): string[] | null {
+  const v = process.env[name];
+  if (!v || !v.trim()) return null;
+  return v
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+// Decide whether an email subject looks like an actual guest message (worth
+// drafting a reply) vs. an automated Peerspace notification (skip).
+function isActionableSubject(subject: string | null | undefined): boolean {
+  const s = (subject || "").toLowerCase();
+  const allow = csvEnv("PEERSPACE_MESSAGE_SUBJECTS");
+  if (allow) return allow.some((a) => s.includes(a)); // strict allowlist mode
+  const ignore = csvEnv("PEERSPACE_IGNORE_SUBJECTS") ?? DEFAULT_IGNORE_SUBJECTS;
+  return !ignore.some((phrase) => s.includes(phrase)); // blocklist mode
+}
+
 export function gmailInboundConfigured(): boolean {
   return Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
 }
@@ -178,6 +223,23 @@ async function pollOnce(): Promise<number> {
       }
       for (const uid of batch) {
         try {
+          // Cheap envelope fetch first (no body) so we can filter out automated
+          // Peerspace notifications without downloading/parsing/Claude-drafting.
+          const head = await client.fetchOne(
+            String(uid),
+            { envelope: true },
+            { uid: true }
+          );
+          const subject = (head && head.envelope?.subject) || "";
+          if (!isActionableSubject(subject)) {
+            console.log(
+              `[gmail-inbound] skipping non-message email (subject: "${subject.slice(0, 80)}")`
+            );
+            // Mark read so it leaves the queue and doesn't block real messages.
+            await client.messageFlagsAdd(String(uid), ["\\Seen"], { uid: true });
+            continue;
+          }
+
           const msg = await client.fetchOne(
             String(uid),
             { source: true },

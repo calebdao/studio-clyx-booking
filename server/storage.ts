@@ -150,6 +150,21 @@ sqlite.exec(`
     ON agent_drafts (status);
 `);
 
+// One-time reclaim: older agent_messages rows may hold huge HTML bodies
+// (Peerspace emails embed large base64 inline images), which OOM the process
+// when loaded back via `.all()`. Null the stored HTML and cap the stored text.
+// Runs in SQLite's C layer (no giant JS strings materialized), so it's safe even
+// for oversized rows, and idempotent (after the first pass there's nothing left).
+try {
+  sqlite.exec(`
+    UPDATE agent_messages SET body_html = NULL WHERE body_html IS NOT NULL;
+    UPDATE agent_messages SET body_text = substr(body_text, 1, 16000)
+      WHERE body_text IS NOT NULL AND length(body_text) > 16000;
+  `);
+} catch (e) {
+  console.error("[storage] agent_messages body cleanup error", e);
+}
+
 // ----- Idempotent ALTER TABLE for upgrade from older schema versions -----
 // SQLite ALTER TABLE … ADD COLUMN throws if the column already exists; we
 // detect via PRAGMA table_info() and add only what's missing. This keeps the

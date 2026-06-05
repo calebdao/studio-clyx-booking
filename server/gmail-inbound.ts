@@ -43,6 +43,10 @@ function maxPerPoll(): number {
   return Math.max(1, Number.isFinite(n) ? n : 5);
 }
 
+// Max characters of plain-text body we keep/draft from. Plenty for a guest
+// message; keeps rows (and prompts) small.
+const MAX_BODY_CHARS = 16000;
+
 export function gmailInboundConfigured(): boolean {
   return Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
 }
@@ -103,8 +107,15 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     return;
   }
 
-  const bodyText = parsed.text || null;
-  const bodyHtml = typeof parsed.html === "string" ? parsed.html : null;
+  // Cap the stored body and DO NOT persist the HTML body. Peerspace HTML emails
+  // can embed large base64 inline images (several MB); storing that and later
+  // loading it via SQLite `.all()` is what OOM'd the process. We draft from the
+  // plain-text body, which is small.
+  const rawText = parsed.text || null;
+  const bodyText =
+    rawText && rawText.length > MAX_BODY_CHARS
+      ? rawText.slice(0, MAX_BODY_CHARS) + "\n…[truncated]"
+      : rawText;
 
   const { conversation, message, duplicate } = await storage.recordInboundEmail({
     threadToken,
@@ -115,7 +126,7 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     fromAddress: from.text || from.address,
     toAddress: to.address,
     bodyText,
-    bodyHtml,
+    bodyHtml: null, // never store HTML — see note above
     providerMessageId: parsed.messageId || null,
     rawJson: null,
   });

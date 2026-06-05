@@ -46,6 +46,7 @@ export function agentStatus() {
     credentialEnv: "ANTHROPIC_API_KEY",
     credentialConfigured: hasKey,
     knowledgeBaseFound: Boolean(loadKnowledgeBase()),
+    knowledgeSource: getEffectiveKnowledge().source,
   };
 }
 
@@ -62,7 +63,9 @@ function knowledgeBasePath(): string {
   );
 }
 
-export function loadKnowledgeBase(): string | null {
+const KNOWLEDGE_SETTING_KEY = "agent_knowledge";
+
+function readKnowledgeFile(): string | null {
   const file = knowledgeBasePath();
   try {
     const stat = fs.statSync(file);
@@ -75,6 +78,36 @@ export function loadKnowledgeBase(): string | null {
   } catch {
     return null;
   }
+}
+
+// Effective knowledge base: the operator's DB-saved version (edited from the
+// admin Knowledge tab) wins; otherwise fall back to the committed file default.
+export function getEffectiveKnowledge(): {
+  text: string | null;
+  source: "db" | "file" | null;
+} {
+  const dbVal = storage.getSetting(KNOWLEDGE_SETTING_KEY);
+  if (dbVal && dbVal.trim()) return { text: dbVal, source: "db" };
+  const fileVal = readKnowledgeFile();
+  if (fileVal && fileVal.trim()) return { text: fileVal, source: "file" };
+  return { text: null, source: null };
+}
+
+export function loadKnowledgeBase(): string | null {
+  return getEffectiveKnowledge().text;
+}
+
+// The committed file default (used by the editor's "reset to default").
+export function getKnowledgeFileDefault(): string | null {
+  return readKnowledgeFile();
+}
+
+export function saveKnowledge(text: string): void {
+  storage.setSetting(KNOWLEDGE_SETTING_KEY, text);
+}
+
+export function resetKnowledgeToFile(): void {
+  storage.deleteSetting(KNOWLEDGE_SETTING_KEY);
 }
 
 // ----- Booking context matching -----

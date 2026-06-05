@@ -6,6 +6,7 @@ import {
   createAddOnSchema,
   updateAddOnSchema,
   agentDraftActionSchema,
+  agentKnowledgeUpdateSchema,
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
   guestSurchargeRate,
@@ -32,7 +33,13 @@ import {
   stripeStatus,
 } from "./stripe";
 import { sendSlotTakenRefundEmail } from "./integrations";
-import { agentStatus } from "./agent";
+import {
+  agentStatus,
+  getEffectiveKnowledge,
+  getKnowledgeFileDefault,
+  resetKnowledgeToFile,
+  saveKnowledge,
+} from "./agent";
 import {
   gmailInboundStatus,
   startGmailInboundPoller,
@@ -881,6 +888,50 @@ export async function registerRoutes(
         }
         next(e);
       }
+    }
+  );
+
+  // Admin: read the effective knowledge base (DB override or file default) for
+  // the browser editor.
+  app.get(
+    "/api/admin/agent/knowledge",
+    requireAdmin,
+    (_req, res) => {
+      const eff = getEffectiveKnowledge();
+      res.json({
+        text: eff.text ?? "",
+        source: eff.source,
+        fileDefaultAvailable: Boolean(getKnowledgeFileDefault()),
+      });
+    }
+  );
+
+  // Admin: save an edited knowledge base (persists in the DB; takes effect on the
+  // next draft — no redeploy).
+  app.put(
+    "/api/admin/agent/knowledge",
+    requireAdmin,
+    (req, res, next) => {
+      try {
+        const { text } = agentKnowledgeUpdateSchema.parse(req.body);
+        saveKnowledge(text);
+        res.json({ ok: true, source: "db" });
+      } catch (e) {
+        if (e instanceof ZodError) {
+          return next(httpError(400, fromZodError(e).toString()));
+        }
+        next(e);
+      }
+    }
+  );
+
+  // Admin: discard the DB override and revert to the committed file default.
+  app.delete(
+    "/api/admin/agent/knowledge",
+    requireAdmin,
+    (_req, res) => {
+      resetKnowledgeToFile();
+      res.json({ ok: true, source: getEffectiveKnowledge().source });
     }
   );
 

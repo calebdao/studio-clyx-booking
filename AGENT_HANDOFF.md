@@ -43,9 +43,13 @@ inbound email service, no extra domain, and no per-message cost.
 - **Direct `fetch` for Claude.** Claude is called via the global `fetch` (no SDK),
   matching the existing Resend/Google integrations. New npm deps: `nodemailer`
   (SMTP), `imapflow` (IMAP), `mailparser` (MIME parsing).
-- **Knowledge base is data, not code.** Edit `docs/agent-knowledge.md` to change
-  how the agent answers — no logic redeploy (re-read on mtime change). It ships
-  in the repo and is read from `process.cwd()/docs/agent-knowledge.md`.
+- **Knowledge base is data, not code.** The committed `docs/agent-knowledge.md`
+  is the default, but the operator can edit it in the browser (admin **Knowledge**
+  tab) — that version is saved in the DB (`app_settings`, key `agent_knowledge`)
+  and **wins over the file**, taking effect on the next message with no redeploy.
+  "Revert to default" discards the DB copy and falls back to the file. See
+  `getEffectiveKnowledge()` in `server/agent.ts` and the
+  `/api/admin/agent/knowledge` GET/PUT/DELETE routes.
 - **Kill switch.** Both the poller and draft generation only run when
   `AGENT_ENABLED=true`.
 

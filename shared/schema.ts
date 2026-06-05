@@ -302,3 +302,18 @@ export const agentDraftActionSchema = z.object({
   editedBody: z.string().trim().min(1).optional(),
 });
 export type AgentDraftAction = z.infer<typeof agentDraftActionSchema>;
+
+// Generic key/value settings (e.g. the editable agent knowledge base). Lets the
+// operator change runtime config without a redeploy; persists in the DB.
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value"),
+  updatedAt: integer("updated_at").notNull(),
+});
+export type AppSettingRow = typeof appSettings.$inferSelect;
+
+// Admin payload to update the knowledge base from the browser editor.
+export const agentKnowledgeUpdateSchema = z.object({
+  text: z.string().max(200000),
+});
+export type AgentKnowledgeUpdate = z.infer<typeof agentKnowledgeUpdateSchema>;

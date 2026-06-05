@@ -20,6 +20,8 @@ import {
   useBookings,
   useAgentConversations,
   useAgentDraftActions,
+  useAgentKnowledge,
+  useAgentKnowledgeMutations,
   type AgentConversation,
   type AgentDraft,
 } from "@/lib/booking-store";
@@ -259,6 +261,9 @@ function AdminConsole() {
               </span>
             )}
           </TabsTrigger>
+          <TabsTrigger value="knowledge" data-testid="tab-knowledge">
+            Knowledge
+          </TabsTrigger>
         </TabsList>
 
         {/* PENDING */}
@@ -352,6 +357,11 @@ function AdminConsole() {
             conversations={agentConversations.data ?? []}
             loading={agentConversations.isLoading}
           />
+        </TabsContent>
+
+        {/* AGENT KNOWLEDGE BASE EDITOR */}
+        <TabsContent value="knowledge">
+          <KnowledgeTab />
         </TabsContent>
       </Tabs>
 
@@ -1726,6 +1736,129 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
             set to <span className="font-mono">true</span>?)
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ----- Agent knowledge base editor -----
+
+function KnowledgeTab() {
+  const { data, isLoading } = useAgentKnowledge();
+  const { save, reset } = useAgentKnowledgeMutations();
+  const { toast } = useToast();
+  const [text, setText] = useState("");
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+
+  // Load the server text into the editor once (and after a reset swaps source).
+  useEffect(() => {
+    if (data && loadedFor !== data.source + ":" + data.text.length) {
+      setText(data.text);
+      setLoadedFor(data.source + ":" + data.text.length);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const dirty = data ? text !== data.text : false;
+  const busy = save.isPending || reset.isPending;
+
+  async function doSave() {
+    try {
+      await save.mutateAsync(text);
+      toast({
+        title: "Knowledge saved",
+        description: "The bot will use it on the next message — no redeploy.",
+      });
+    } catch (err) {
+      toast({
+        title: "Could not save",
+        description: (err instanceof Error ? err.message : "").replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function doReset() {
+    if (
+      !window.confirm(
+        "Discard your saved edits and revert to the built-in default? This can't be undone."
+      )
+    )
+      return;
+    try {
+      const r = await reset.mutateAsync();
+      setLoadedFor(null); // force reload of the reverted text
+      toast({
+        title: "Reverted to default",
+        description:
+          r.source === "file"
+            ? "Now using the built-in knowledge file."
+            : "Default restored.",
+      });
+    } catch (err) {
+      toast({
+        title: "Could not reset",
+        description: (err instanceof Error ? err.message : "").replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="text-sm text-muted-foreground py-10 text-center">
+        <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+        Loading knowledge…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">Agent knowledge base</h2>
+          <p className="text-xs text-muted-foreground max-w-2xl mt-0.5">
+            What the email bot uses to answer guests (spaces, lighting, pricing,
+            FAQs, guardrails). Edit and save — it takes effect on the next message,
+            no redeploy. Plain text / Markdown.
+          </p>
+        </div>
+        <span className="text-[11px] font-mono text-muted-foreground">
+          source: {data?.source ?? "none"}
+          {dirty ? " · unsaved changes" : ""}
+        </span>
+      </div>
+
+      <Textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={26}
+        spellCheck={false}
+        className="font-mono text-xs leading-relaxed"
+        data-testid="textarea-knowledge"
+      />
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy || data?.source !== "db"}
+          onClick={doReset}
+          title={
+            data?.source === "db"
+              ? "Discard saved edits, revert to the built-in default"
+              : "Already using the built-in default"
+          }
+        >
+          Revert to default
+        </Button>
+        <Button size="sm" disabled={busy || !dirty} onClick={doSave}>
+          {busy ? (
+            <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+          ) : null}
+          Save knowledge
+        </Button>
       </div>
     </div>
   );

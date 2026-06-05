@@ -5,6 +5,7 @@ import {
   agentConversations,
   agentMessages,
   agentDrafts,
+  appSettings,
 } from "@shared/schema";
 import {
   computeCardSurcharge,
@@ -149,6 +150,11 @@ sqlite.exec(`
     ON agent_drafts (conversation_id);
   CREATE INDEX IF NOT EXISTS idx_agent_drafts_status
     ON agent_drafts (status);
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at INTEGER NOT NULL
+  );
 `);
 
 // One-time reclaim: older agent_messages rows may hold huge HTML bodies
@@ -516,6 +522,10 @@ export interface IStorage {
   ): Promise<AgentDraftRow | undefined>;
   listAgentConversations(): Promise<AgentConversationDto[]>;
   getAgentConversation(id: string): Promise<AgentConversationDto | undefined>;
+  // App settings (sync — backed by SQLite). Used by the editable knowledge base.
+  getSetting(key: string): string | null;
+  setSetting(key: string, value: string): void;
+  deleteSetting(key: string): void;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1322,6 +1332,30 @@ export class DatabaseStorage implements IStorage {
         .sort((a, b) => a.createdAt - b.createdAt);
       return agentConversationRowToDto(c, messages, drafts);
     });
+  }
+
+  getSetting(key: string): string | null {
+    const row = db
+      .select()
+      .from(appSettings)
+      .where(eq(appSettings.key, key))
+      .get();
+    return row?.value ?? null;
+  }
+
+  setSetting(key: string, value: string): void {
+    const now = Date.now();
+    db.insert(appSettings)
+      .values({ key, value, updatedAt: now })
+      .onConflictDoUpdate({
+        target: appSettings.key,
+        set: { value, updatedAt: now },
+      })
+      .run();
+  }
+
+  deleteSetting(key: string): void {
+    db.delete(appSettings).where(eq(appSettings.key, key)).run();
   }
 
   async getAgentConversation(

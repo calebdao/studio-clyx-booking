@@ -445,3 +445,65 @@ export function useAgentDraftActions() {
     },
   });
 }
+
+// ----- Agent knowledge base (admin Knowledge tab) -----
+
+const AGENT_KNOWLEDGE_KEY = ["/api/admin/agent/knowledge"] as const;
+
+export type AgentKnowledge = {
+  text: string;
+  source: "db" | "file" | null;
+  fileDefaultAvailable: boolean;
+};
+
+export function useAgentKnowledge() {
+  const { adminPin } = useAdmin();
+  return useQuery<AgentKnowledge>({
+    queryKey: AGENT_KNOWLEDGE_KEY,
+    enabled: !!adminPin,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const res = await apiRequest(
+        "GET",
+        "/api/admin/agent/knowledge",
+        undefined,
+        { headers: { "x-admin-pin": adminPin ?? "" } }
+      );
+      return (await res.json()) as AgentKnowledge;
+    },
+  });
+}
+
+export function useAgentKnowledgeMutations() {
+  const { adminPin } = useAdmin();
+  const headers = { "x-admin-pin": adminPin ?? "" };
+  const save = useMutation({
+    mutationFn: async (text: string) => {
+      const res = await apiRequest(
+        "PUT",
+        "/api/admin/agent/knowledge",
+        { text },
+        { headers }
+      );
+      return (await res.json()) as { ok: boolean; source: string };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: AGENT_KNOWLEDGE_KEY });
+    },
+  });
+  const reset = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest(
+        "DELETE",
+        "/api/admin/agent/knowledge",
+        undefined,
+        { headers }
+      );
+      return (await res.json()) as { ok: boolean; source: string | null };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: AGENT_KNOWLEDGE_KEY });
+    },
+  });
+  return { save, reset };
+}

@@ -170,6 +170,21 @@ function extractGuestMessage(raw: string | null): string | null {
   if (!raw) return raw;
   let text = raw.replace(/\r\n?/g, "\n");
 
+  // Preferred: Peerspace puts the guest's message between a "Message from
+  // <name>:" line and the "Stay safe on Peerspace" safety notice. Everything
+  // else in the email is boilerplate.
+  const startM = text.match(/Message from .+?:\s*\n/i);
+  if (startM && startM.index !== undefined) {
+    const rest = text.slice(startM.index + startM[0].length);
+    const endIdx = rest.search(/Stay safe on Peerspace/i);
+    const msg = (endIdx !== -1 ? rest.slice(0, endIdx) : rest)
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[\s*]+$/g, "") // drop trailing whitespace + the "*" before the notice
+      .trim();
+    if (msg.length >= 2) return msg;
+  }
+
+  // Fallback for any other format: strip footer/quoted history heuristically.
   // Cut everything from the first footer/quoted-history marker onward.
   let cut = text.length;
   for (const re of FOOTER_MARKERS) {

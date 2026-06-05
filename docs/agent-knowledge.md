@@ -21,6 +21,14 @@ Peerspace; this mailbox handles their messages.
 - **Lincoln Apartment** — Curated mid-century two-bedroom apartment with a
   living room, kitchen, natural light, a blush bedroom, and artful details.
 
+## Lighting & natural light
+
+- **Studio 1 & Studio 3** — Windows face **East**. They get the most direct
+  morning light, starting around **6:45 AM** and gradually retreating until about
+  **11 AM**.
+- **Studio 2** — Windows face **West**. It gets the most direct afternoon light,
+  from about **2 PM until sunset**.
+
 ## Pricing
 
 Base hourly rates by activity:
@@ -78,6 +86,45 @@ Other fees:
 
 To cancel or reschedule, guests can call Gladys at +1 646 384 4403 or Caleb at
 +1 646 384 2698.
+
+## Frequently asked questions
+
+**Can I bring my own food and drinks?**
+Yes — you're welcome to bring your own food. Please take all leftovers and trash
+out with you at the end of your session. If alcohol will be served, there's a $50
+alcohol consumption fee (added under add-ons).
+
+**What time does the studio close / what are the hours?**
+The studio is available for booking 24 hours a day.
+
+**Do you provide tables and chairs?**
+Yes — we provide 2 folding tables in each of the 3 studios at no charge. Folding
+chairs are an add-on: $45 for every 10 folding chairs (we have 30 total). Please
+add chairs when you book.
+
+**Is loud music or a live DJ allowed?**
+Loud music and live DJs are allowed after 5 PM only.
+
+**Can I bring my pet (cat or dog)?**
+It's handled case by case. Please contact us at +1 646 384 4403 or
++1 646 384 2698 with a description of your cat or dog so we can confirm.
+
+**Can I extend my booking?**
+Possibly — it depends on whether a later booking is already confirmed. Please
+contact us at +1 646 384 4403 or +1 646 384 2698 to arrange an extension.
+
+**Can I reschedule or cancel?**
+If you change the date or time within 7 days of your confirmed session's start, a
+50% rescheduling/cancellation fee applies. Within 24 hours of your session, the
+full 100% fee applies.
+
+**How does the freight elevator work?**
+Only the building's freight operator may operate the freight elevator. Operating
+hours are 8 AM–12 PM, then an operator lunch break, resuming 1 PM–4 PM. To use it,
+be **fully unloaded and ready at the freight entrance on Grattan Street first**,
+then call us at +1 646 384 2698 or +1 646 384 4403 and we'll call for the
+operator. The operator serves the entire building, cannot be booked in advance,
+and will not wait for unloading.
 
 ## Tone & how to reply
 

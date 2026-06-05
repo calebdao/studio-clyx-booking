@@ -214,6 +214,28 @@ function extractGuestMessage(raw: string | null): string | null {
   return text.length >= 3 ? text : raw.trim();
 }
 
+// Parse Peerspace's "Inquiry details" block (listing, date/time, attendees) into
+// a JSON string for booking context. Returns null if the section isn't present.
+function parseInquiryDetails(raw: string | null): string | null {
+  if (!raw || !/Inquiry details/i.test(raw)) return null;
+  const text = raw.replace(/\r\n?/g, "\n");
+  const valueAfter = (label: string): string | null => {
+    const re = new RegExp(
+      label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*\\n+\\s*([^\\n]+)",
+      "i"
+    );
+    const m = text.match(re);
+    if (!m) return null;
+    const v = m[1].trim().replace(/^\*+|\*+$/g, "").trim();
+    return v || null;
+  };
+  const listing = valueAfter("Inquiry details");
+  const dateTime = valueAfter("Date and time");
+  const attendees = valueAfter("Attendees");
+  if (!listing && !dateTime && !attendees) return null;
+  return JSON.stringify({ listing, dateTime, attendees });
+}
+
 async function ingestRawEmail(source: Buffer): Promise<void> {
   const parsed = await simpleParser(source);
   const from = firstAddress(parsed.from);
@@ -250,6 +272,7 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     bodyHtml: null, // never store HTML — see note above
     providerMessageId: parsed.messageId || null,
     rawJson: null,
+    inquiryDetails: parseInquiryDetails(rawText),
   });
 
   if (duplicate) return;

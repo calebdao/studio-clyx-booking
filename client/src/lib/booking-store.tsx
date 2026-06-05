@@ -394,6 +394,7 @@ export type AgentConversation = {
   bookingId?: string | null;
   subject?: string | null;
   status: "open" | "closed";
+  inquiryDetails?: string | null;
   createdAt: number;
   updatedAt: number;
   messages: AgentMessage[];

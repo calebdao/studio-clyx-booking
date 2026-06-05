@@ -1473,6 +1473,26 @@ function fmtAgentTime(ms: number) {
   });
 }
 
+// Parse the Peerspace inquiry-details JSON stored on a conversation into a short
+// one-line summary for the operator (and what the bot uses as context).
+function inquirySummary(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw) as {
+      listing?: string | null;
+      dateTime?: string | null;
+      attendees?: string | null;
+    };
+    const parts: string[] = [];
+    if (d.listing) parts.push(d.listing);
+    if (d.dateTime) parts.push(d.dateTime);
+    if (d.attendees) parts.push(`${d.attendees} guests`);
+    return parts.length ? parts.join(" · ") : null;
+  } catch {
+    return null;
+  }
+}
+
 function InboxTab({
   conversations,
   loading,
@@ -1597,6 +1617,13 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
           </span>
         </div>
       </div>
+
+      {/* Inquiry context (listing · date · party size) */}
+      {inquirySummary(convo.inquiryDetails) && (
+        <div className="px-4 py-1.5 text-[11px] text-muted-foreground bg-muted/10 border-b truncate">
+          📋 {inquirySummary(convo.inquiryDetails)}
+        </div>
+      )}
 
       {/* Thread */}
       <div className="px-4 py-3 space-y-3 max-h-[320px] overflow-y-auto">

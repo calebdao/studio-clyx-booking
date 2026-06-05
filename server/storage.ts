@@ -107,6 +107,7 @@ sqlite.exec(`
     booking_id TEXT,
     subject TEXT,
     status TEXT NOT NULL DEFAULT 'open',
+    inquiry_details TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
@@ -164,6 +165,17 @@ try {
 } catch (e) {
   console.error("[storage] agent_messages body cleanup error", e);
 }
+
+// Idempotent ADD COLUMN for agent_conversations upgrades (existing prod data.db).
+function ensureColumn(table: string, name: string, ddl: string) {
+  const rows = sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+    name: string;
+  }>;
+  if (!rows.some((r) => r.name === name)) {
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+ensureColumn("agent_conversations", "inquiry_details", "inquiry_details TEXT");
 
 // ----- Idempotent ALTER TABLE for upgrade from older schema versions -----
 // SQLite ALTER TABLE … ADD COLUMN throws if the column already exists; we
@@ -313,6 +325,7 @@ function agentConversationRowToDto(
     bookingId: r.bookingId ?? undefined,
     subject: r.subject ?? undefined,
     status: r.status as AgentConversationDto["status"],
+    inquiryDetails: r.inquiryDetails ?? undefined,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     messages: messages.map(agentMessageRowToDto),
@@ -450,6 +463,7 @@ export interface IStorage {
     bodyHtml?: string | null;
     providerMessageId?: string | null;
     rawJson?: string | null;
+    inquiryDetails?: string | null;
   }): Promise<{
     conversation: AgentConversationRow;
     message: AgentMessageRow;
@@ -1134,6 +1148,7 @@ export class DatabaseStorage implements IStorage {
     bodyHtml?: string | null;
     providerMessageId?: string | null;
     rawJson?: string | null;
+    inquiryDetails?: string | null;
   }): Promise<{
     conversation: AgentConversationRow;
     message: AgentMessageRow;
@@ -1156,6 +1171,7 @@ export class DatabaseStorage implements IStorage {
         bookingId: null,
         subject: args.subject ?? null,
         status: "open",
+        inquiryDetails: args.inquiryDetails ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -1171,6 +1187,7 @@ export class DatabaseStorage implements IStorage {
       if (!conversation.guestEmail && args.guestEmail)
         set.guestEmail = args.guestEmail;
       if (!conversation.subject && args.subject) set.subject = args.subject;
+      if (args.inquiryDetails) set.inquiryDetails = args.inquiryDetails;
       if (conversation.status === "closed") set.status = "open";
       db.update(agentConversations)
         .set(set)

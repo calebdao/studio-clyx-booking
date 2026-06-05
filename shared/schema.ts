@@ -208,6 +208,7 @@ export const agentConversations = sqliteTable("agent_conversations", {
   bookingId: text("booking_id"), // matched booking, if any (refs bookings.id)
   subject: text("subject"),
   status: text("status").notNull().default("open"), // open | closed
+  inquiryDetails: text("inquiry_details"), // JSON {listing,dateTime,attendees} parsed from the Peerspace email
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
@@ -287,6 +288,7 @@ export const agentConversationDtoSchema = z.object({
   bookingId: z.string().nullable().optional(),
   subject: z.string().nullable().optional(),
   status: z.enum(["open", "closed"]),
+  inquiryDetails: z.string().nullable().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
   messages: z.array(agentMessageDtoSchema).default([]),

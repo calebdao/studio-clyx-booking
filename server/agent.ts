@@ -148,9 +148,29 @@ function formatBookingContext(b: BookingDto): string {
 
 // ----- Prompt assembly -----
 
+// Format the Peerspace "Inquiry details" JSON into prompt context.
+function formatInquiryContext(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw) as {
+      listing?: string | null;
+      dateTime?: string | null;
+      attendees?: string | null;
+    };
+    const lines: string[] = [];
+    if (d.listing) lines.push(`- Peerspace listing the guest is asking about: ${d.listing}`);
+    if (d.dateTime) lines.push(`- Requested date/time: ${d.dateTime}`);
+    if (d.attendees) lines.push(`- Party size on the original inquiry: ${d.attendees}`);
+    return lines.length ? lines.join("\n") : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildSystemPrompt(
   knowledge: string,
-  bookingContext: string | null
+  bookingContext: string | null,
+  inquiryContext: string | null
 ): string {
   return [
     "You are the email assistant for Studio Clyx, replying to a guest who",
@@ -168,6 +188,14 @@ function buildSystemPrompt(
     "===== KNOWLEDGE BASE =====",
     knowledge,
     "===== END KNOWLEDGE BASE =====",
+    ...(inquiryContext
+      ? [
+          "",
+          "===== PEERSPACE INQUIRY CONTEXT (what the guest's request is about — reference naturally) =====",
+          inquiryContext,
+          "===== END INQUIRY CONTEXT =====",
+        ]
+      : []),
     ...(bookingContext
       ? [
           "",
@@ -322,7 +350,8 @@ export async function generateDraftForConversation(
 
   const system = buildSystemPrompt(
     knowledge,
-    booking ? formatBookingContext(booking) : null
+    booking ? formatBookingContext(booking) : null,
+    formatInquiryContext(convo.inquiryDetails)
   );
   const messages = buildMessages(convo);
 

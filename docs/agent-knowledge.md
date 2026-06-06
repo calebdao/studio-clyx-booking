@@ -39,6 +39,153 @@ listing, map it to the studio below so you describe the right space:
 - **Studio 2** — Windows face **West**. It gets the most direct afternoon light,
   from about **2 PM until sunset**.
 
+## Space sizes & capacity
+
+- Studio 1 — ~900 sq ft, 3rd floor.
+- Studio 2 — ~850 sq ft, 1st floor.
+- Studio 3 — ~900 sq ft, 3rd floor.
+- Lincoln Apartment — ~700 sq ft, 2nd floor.
+- Capacity: up to **40 guests** in any studio (1/2/3); up to **20 guests** at the
+  Lincoln Apartment.
+- Studio 1 connects to Studio 3 via French doors for larger shoots.
+
+All spaces work equally well for photo, video, meetings, and events.
+
+## Recording & noise
+
+The spaces aren't fully soundproof but are generally quiet. Studios 1 & 3 (3rd
+floor) are quieter than Studio 2 (1st floor, closer to the street), though Studio
+2 is still quite quiet — many video teams record podcasts and interviews there.
+Guests are welcome to scout the space to check the sound for themselves.
+
+## Equipment included (free)
+
+Studios 1 & 2 each include, at no charge:
+- 5 C-stands
+- 1 apple box family
+- 1 8-ft ladder
+- Clothing steamer
+- Rolling clothing rack with 20 hangers
+- 2 V-flats
+- 1 Godox 200W LED constant light
+
+Studio 3 includes all of the above **except** the apple box family.
+
+Studios 1, 2 & 3 also have: full-length mirrors, a rolling clothing rack, a
+steamer, a make-up vanity table, a changing area, and two 6-ft folding tables.
+
+The Lincoln Apartment doesn't include production equipment, but has an iron +
+ironing board, a desk that works for make-up, and a bathroom inside the unit
+(no full-length mirror).
+
+Guests are welcome to bring their own equipment. More equipment is available as
+paid add-ons — most are listed in the Peerspace add-on section (a fuller list is
+coming). Notable add-ons: a Mackie Thump212 powered PA speaker kit with stand
+(2 sets), backdrop stands ($35), and backdrop paper ($38 per 8-ft pull).
+
+## Backdrops
+
+- **Studio 1** — a ceiling backdrop roller system with three installed 9-ft paper
+  rolls: white, dark grey, and beige. It's run by a remote control kept on the
+  top-left shelf of the credenza (the dark-brown wooden credenza under the
+  artwork on the left side of the studio, near the window).
+- **Studios 2 & 3** — a full-size 9-ft white paper roll is available, but guests
+  set it up themselves on the provided C-stands or on backdrop stands ($35
+  add-on). Guests may also bring their own seamless paper or stands.
+- **Backdrop paper** is available as an add-on at $38 per 8-ft pull — tell us the
+  color (white, grey, or beige).
+- **Lincoln Apartment** — limited room for a backdrop; seamless paper isn't
+  provided there.
+
+Guests may also buy their own roll (e.g., B&H or Amazon) and ship it to the
+studio unit — Studio 1 is unit 321, Studio 2 is unit 118, Studio 3 is unit 319.
+Note: building logistics can take more than a day to sort and deliver a package
+to the unit door, so plan for that lag. The building is generally safe, but
+Studio Clyx isn't responsible for late, missing, or undelivered packages.
+
+## Power & outlets
+
+Outlets in every space can run lighting, but **hot lights can trip the breaker if
+a high-draw tool (steamer, curling iron, etc.) is on the same circuit** — spread
+high-draw items across different outlets.
+- Studio 1 — 3 sets of dual outlets on the left wall, 2 on the right.
+- Studio 2 — 3 on the left wall, 2 on the right.
+- Studio 3 — 1 in the changing/make-up room, 2 on the left, 3 on the right.
+- Lincoln Apartment — about 12 dual outlets throughout.
+
+A breaker box is accessible in every space; Studio 1's is in a storeroom that
+needs a code — call us if you need access.
+
+## Sound / speakers
+
+- Studios 1 & 2 — a portable Anker Soundcore speaker (rechargeable, movable).
+  Connect over Bluetooth; it appears as "soundcore 2".
+- Studio 3 — a Sonos One. It doesn't pair over regular Bluetooth: on an Apple
+  device use AirPlay (Control Center → AirPlay / audio output → select the Sonos),
+  or use the Sonos app on the studio Wi-Fi. Android users can use the Sonos app
+  or Spotify Connect on the studio Wi-Fi.
+- A Mackie Thump212 powered PA speaker kit with stand is available as an add-on
+  (2 sets). Reminder: no loud music between 7 AM and 5 PM (allowed after 5 PM).
+
+## Wi-Fi
+
+Wi-Fi is available in all spaces. For booked guests, the network name and password
+are included in the entry instructions sent on booking (and posted on a pink sheet
+on the apartment's front door at the Lincoln Apartment). For a general inquiry,
+just confirm that Wi-Fi is available.
+
+## Bathrooms & water
+
+- Studios 1 & 3 (3rd floor) — same floor: from the studio door, turn right, then
+  right again; the bathroom is at the end of the corridor (trash bins are here too).
+- Studio 2 (1st floor) — same floor: exit the studio, turn right, then left and
+  follow the corridor to the end; the women's bathroom is at your 11 o'clock and
+  the men's is at your 9 o'clock, tucked in the corner beyond the metal sink.
+- Lincoln Apartment — bathroom is inside the apartment, next to the front door.
+- Tap water is available at the metal sinks next to the bathrooms (studios 1/2/3).
+
+## Kitchen
+
+- Studios 1, 2 & 3 — no kitchen, fridge, microwave, or coffee/tea; tap water is
+  available at the metal sinks by the bathrooms.
+- Lincoln Apartment — has a fridge, oven, stove, kettle, and kitchen utensils.
+
+## Climate
+
+- Studios 1, 2 & 3 — a window A/C unit in each, plus building central heating.
+- Lincoln Apartment — several A/C units (one in each room).
+
+## Getting in: stairs, accessibility & the freight elevator
+
+- Studios 1 & 3 are on the 3rd floor (a flight of stairs). Studio 2 is on the 1st
+  floor, up a short flight of ~6 steps from the street. The Lincoln Apartment is a
+  2nd-floor walk-up, ~20 steps from the street.
+- For heavy equipment, furniture, or large loads, use the **freight elevator**
+  (run by the building's freight operator). Hours: 8 AM–12 PM and 1 PM–4 PM. It
+  can't be booked in advance and serves the whole building, so it can take ~5–10
+  minutes for the operator to arrive — be fully unloaded and ready at the
+  designated freight spot, as the operator won't wait.
+- To request freight on the day of your booking, call Gladys at 646-384-4403 or
+  Caleb at 646-384-2698; we'll arrange it with the building manager.
+- The freight generally allows **one trip up at the start and one down at the end**
+  of your session. People and their baggage/equipment/furniture can ride together
+  — please **consolidate** so it fits in one trip. If you truly have too much for
+  one trip, let us know and we'll try to make an exception.
+- We can make freight exceptions for guests who are pregnant, in a wheelchair, or
+  have a disability.
+- Freight hours can sometimes be **extended** (e.g., until ~6:30 PM for roughly
+  $100–$150), subject to the operator's availability — request as early as
+  possible to lock it in; Caleb or Gladys will confirm with the building manager.
+
+## Parking & loading
+
+- Studios (56 Bogart Street) — street parking around the building, plus a parking
+  garage at 12 Harrison Place (on Harrison Street, behind the building).
+- Lincoln Apartment — street parking only.
+- To unload heavy equipment for the freight elevator at 56 Bogart Street, use the
+  building's side entrance — the nearest address is **13 Grattan Street**, next to
+  the freight entrance.
+
 ## Pricing
 
 Base hourly rates by activity:
@@ -108,9 +255,9 @@ alcohol consumption fee (added under add-ons).
 The studio is available for booking 24 hours a day.
 
 **Do you provide tables and chairs?**
-Yes — we provide 2 folding tables in each of the 3 studios at no charge. Folding
-chairs are an add-on: $45 for every 10 folding chairs (we have 30 total). Please
-add chairs when you book.
+Yes — we provide two 6-ft folding tables in each of the 3 studios at no charge.
+Folding chairs are an add-on: $45 for every 10 folding chairs (we have 30 total).
+Please add chairs when you book.
 
 **Is loud music or a live DJ allowed?**
 Loud music and live DJs are allowed after 5 PM only.
@@ -129,18 +276,17 @@ If you change the date or time within 7 days of your confirmed session's start, 
 full 100% fee applies.
 
 **How does the freight elevator work?**
-Only the building's freight operator may operate the freight elevator. Operating
-hours are 8 AM–12 PM, then an operator lunch break, resuming 1 PM–4 PM. To use it,
-be **fully unloaded and ready at the freight entrance on Grattan Street first**,
-then call us at +1 646 384 2698 or +1 646 384 4403 and we'll call for the
-operator. The operator serves the entire building, cannot be booked in advance,
-and will not wait for unloading.
+See "Getting in: stairs, accessibility & the freight elevator" above for the full
+details (hours, how to request it, and the one-trip-up / one-trip-down guidance).
 
 ## Tone & how to reply
 
 - Warm, concise, and professional. Sign off as "Studio Clyx".
 - Answer the guest's actual question first, then add only the details they need.
 - It's fine to quote pricing and policy from this document.
+- When explaining the freight elevator's one-trip-up / one-trip-down guidance, be
+  especially warm and gracious — frame it as how the building works, not a
+  restriction. Guests are valued.
 
 ## Guardrails — do NOT do these
 

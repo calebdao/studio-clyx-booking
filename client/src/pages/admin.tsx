@@ -70,6 +70,7 @@ import {
   Inbox,
   Send,
   MessageSquare,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -1629,6 +1630,11 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
               needs you
             </span>
           )}
+          {!pendingDraft && sentDraft?.autoSent && (
+            <span className="text-[10px] font-mono rounded-full bg-sky-500/15 text-sky-700 dark:text-sky-300 px-2 py-0.5 inline-flex items-center gap-1">
+              <Zap className="w-3 h-3" /> auto-sent
+            </span>
+          )}
           {convo.bookingId && (
             <span className="text-[10px] font-mono rounded-full bg-emerald-500/15 text-emerald-700 px-2 py-0.5">
               booking linked
@@ -1766,9 +1772,19 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
             </div>
           </div>
         ) : sentDraft ? (
-          <div className="text-sm text-emerald-700 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4" />
-            Replied{sentDraft.sentAt ? ` · ${fmtAgentTime(sentDraft.sentAt)}` : ""}
+          <div
+            className={cn(
+              "text-sm flex items-center gap-2",
+              sentDraft.autoSent ? "text-sky-700 dark:text-sky-400" : "text-emerald-700"
+            )}
+          >
+            {sentDraft.autoSent ? (
+              <Zap className="w-4 h-4" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4" />
+            )}
+            {sentDraft.autoSent ? "Auto-sent by bot" : "Replied"}
+            {sentDraft.sentAt ? ` · ${fmtAgentTime(sentDraft.sentAt)}` : ""}
           </div>
         ) : (
           <div className="text-xs text-muted-foreground">

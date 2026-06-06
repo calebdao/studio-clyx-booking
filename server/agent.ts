@@ -418,6 +418,7 @@ export async function deliverReply(args: {
   draftId: string;
   subject: string;
   text: string;
+  auto?: boolean; // true when sent automatically (not operator-approved)
 }): Promise<{ ok: boolean; simulated: boolean; error?: string }> {
   const to = args.conversation.peerspaceReplyTo;
   if (!to || !to.includes("@")) {
@@ -449,6 +450,7 @@ export async function deliverReply(args: {
     sentAt: Date.now(),
     reviewedAt: Date.now(),
     resendId: providerId,
+    autoSent: Boolean(args.auto),
   });
   return { ok: true, simulated: send.mode === "simulation" };
 }
@@ -588,6 +590,7 @@ export async function generateDraftForConversation(
       draftId: draft.id,
       subject,
       text: structured.reply,
+      auto: true,
     });
     console.log(
       sent.ok

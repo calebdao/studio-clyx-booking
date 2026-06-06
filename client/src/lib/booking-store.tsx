@@ -379,6 +379,7 @@ export type AgentDraft = {
   model?: string | null;
   status: "pending" | "approved" | "rejected" | "sent" | "error";
   needsHuman?: boolean;
+  autoSent?: boolean;
   reviewedAt?: number | null;
   sentAt?: number | null;
   resendId?: string | null;

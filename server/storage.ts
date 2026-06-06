@@ -136,6 +136,7 @@ sqlite.exec(`
     model TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     needs_human INTEGER NOT NULL DEFAULT 0,
+    auto_sent INTEGER NOT NULL DEFAULT 0,
     reviewed_by TEXT,
     reviewed_at INTEGER,
     sent_at INTEGER,
@@ -184,6 +185,7 @@ function ensureColumn(table: string, name: string, ddl: string) {
 }
 ensureColumn("agent_conversations", "inquiry_details", "inquiry_details TEXT");
 ensureColumn("agent_drafts", "needs_human", "needs_human INTEGER NOT NULL DEFAULT 0");
+ensureColumn("agent_drafts", "auto_sent", "auto_sent INTEGER NOT NULL DEFAULT 0");
 
 // ----- Idempotent ALTER TABLE for upgrade from older schema versions -----
 // SQLite ALTER TABLE … ADD COLUMN throws if the column already exists; we
@@ -312,6 +314,7 @@ function agentDraftRowToDto(r: AgentDraftRow): AgentDraftDto {
     model: r.model ?? undefined,
     status: r.status as AgentDraftDto["status"],
     needsHuman: Boolean(r.needsHuman),
+    autoSent: Boolean(r.autoSent),
     reviewedAt: r.reviewedAt ?? undefined,
     sentAt: r.sentAt ?? undefined,
     resendId: r.resendId ?? undefined,
@@ -520,6 +523,7 @@ export interface IStorage {
         | "sentAt"
         | "resendId"
         | "error"
+        | "autoSent"
       >
     >
   ): Promise<AgentDraftRow | undefined>;
@@ -1281,6 +1285,7 @@ export class DatabaseStorage implements IStorage {
       model: args.model ?? null,
       status: args.status ?? "pending",
       needsHuman: args.needsHuman ?? false,
+      autoSent: false,
       reviewedBy: null,
       reviewedAt: null,
       sentAt: null,
@@ -1308,6 +1313,7 @@ export class DatabaseStorage implements IStorage {
         | "sentAt"
         | "resendId"
         | "error"
+        | "autoSent"
       >
     >
   ): Promise<AgentDraftRow | undefined> {

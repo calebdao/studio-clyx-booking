@@ -414,7 +414,7 @@ function parseStructured(text: string): StructuredReply {
 // thread, record the outbound message, and mark the draft sent. Used by both the
 // admin Approve button and auto-send.
 export async function deliverReply(args: {
-  conversation: AgentConversationDto;
+  conversation: { id: string; peerspaceReplyTo?: string | null };
   draftId: string;
   subject: string;
   text: string;

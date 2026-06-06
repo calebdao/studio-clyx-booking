@@ -7,6 +7,7 @@ import {
   updateAddOnSchema,
   agentDraftActionSchema,
   agentKnowledgeUpdateSchema,
+  agentInstructionsUpdateSchema,
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
   guestSurchargeRate,
@@ -23,6 +24,10 @@ import {
   startHoldExpirySweeper,
 } from "./integrations";
 import { gmailStatus } from "./gmail";
+import {
+  getInstructionTemplates,
+  saveInstructionTemplates,
+} from "./booking-instructions";
 import {
   constructWebhookEvent,
   createDraftPaymentIntent,
@@ -918,6 +923,25 @@ export async function registerRoutes(
       res.json({ ok: true, source: getEffectiveKnowledge().source });
     }
   );
+
+  // Admin: read/save the booking entry-instruction templates (DB-only; they
+  // contain door codes and are never committed to the repo).
+  app.get("/api/admin/agent/instructions", requireAdmin, (_req, res) => {
+    res.json({ instructions: getInstructionTemplates() });
+  });
+
+  app.put("/api/admin/agent/instructions", requireAdmin, (req, res, next) => {
+    try {
+      const { instructions } = agentInstructionsUpdateSchema.parse(req.body);
+      saveInstructionTemplates(instructions);
+      res.json({ ok: true });
+    } catch (e) {
+      if (e instanceof ZodError) {
+        return next(httpError(400, fromZodError(e).toString()));
+      }
+      next(e);
+    }
+  });
 
   // ----- Integration status (admin callout) -----
   app.get("/api/integrations/status", (_req, res) => {

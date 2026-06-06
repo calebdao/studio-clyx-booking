@@ -322,3 +322,31 @@ export const agentKnowledgeUpdateSchema = z.object({
   text: z.string().max(200000),
 });
 export type AgentKnowledgeUpdate = z.infer<typeof agentKnowledgeUpdateSchema>;
+
+// Access/entry instruction templates sent on a confirmed booking. Kept in the DB
+// only (never the repo) because they contain door/lockbox codes. Studio 1 & 2
+// have a 9am–3pm ("day") and an after-hours variant; Studio 3 and Lincoln have a
+// single set.
+export const BOOKING_INSTRUCTION_KEYS = [
+  "studio-1-day",
+  "studio-1-after",
+  "studio-2-day",
+  "studio-2-after",
+  "studio-3",
+  "lincoln-apartment",
+] as const;
+export type BookingInstructionKey = (typeof BOOKING_INSTRUCTION_KEYS)[number];
+
+export const BOOKING_INSTRUCTION_LABELS: Record<BookingInstructionKey, string> = {
+  "studio-1-day": "Studio 1 — 9am–3pm (physical key / lockbox)",
+  "studio-1-after": "Studio 1 — after hours (self-entry link)",
+  "studio-2-day": "Studio 2 — 9am–3pm",
+  "studio-2-after": "Studio 2 — after hours (self-entry link)",
+  "studio-3": "Studio 3 (any time)",
+  "lincoln-apartment": "Lincoln Apartment (any time)",
+};
+
+export const agentInstructionsUpdateSchema = z.object({
+  instructions: z.record(z.string().max(20000)),
+});
+export type AgentInstructionsUpdate = z.infer<typeof agentInstructionsUpdateSchema>;

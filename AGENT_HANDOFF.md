@@ -25,6 +25,22 @@ explains the flow, every file touched, the external accounts you need to set up
 Both halves (read + send) use the **one** Gmail account and its app password;
 there is no inbound email service, no extra domain, and no per-message cost.
 
+## Booking access instructions
+
+Confirmed-booking emails (body has "Booking details" + "View booking"/"Payout")
+are handled deterministically, NOT by the LLM:
+
+- `server/booking-instructions.ts` detects the studio (Roman numeral "STUDIO CLYX
+  I/II/III" → address/unit → listing name) and the booking start time, then picks
+  the exact template. Studio 1 & 2 have a 9am–3pm ("day") and after-hours variant
+  (by start time, NY); Studio 3 & Lincoln have one each.
+- Templates contain **door/lockbox codes**, so they're stored **only in the DB**
+  (`app_settings` key `booking_instructions`), edited via the admin **Access
+  Instructions** tab — never committed (the repo is public).
+- The chosen template is sent verbatim through `deliverReply` (auto when
+  `AGENT_AUTO_SEND` is on, else a draft). If the studio/time/template can't be
+  resolved, it's flagged `needsHuman` + emailed — never a wrong/blank code.
+
 ## Confidence, auto-send, and learning
 
 Claude must answer **only** from the knowledge base and returns a structured

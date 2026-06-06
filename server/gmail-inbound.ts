@@ -1,7 +1,18 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser, type AddressObject } from "mailparser";
 import { storage } from "./storage";
-import { agentEnabled, generateDraftForConversation } from "./agent";
+import {
+  agentAutoSend,
+  agentEnabled,
+  deliverReply,
+  generateDraftForConversation,
+} from "./agent";
+import {
+  isBookingEmail,
+  parseBooking,
+  selectInstruction,
+} from "./booking-instructions";
+import { sendAgentNovelQuestionAlert } from "./integrations";
 
 // ---------------------------------------------------------------------------
 // Gmail IMAP poller for the Peerspace email-reply agent.
@@ -274,6 +285,20 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     return;
   }
 
+  // Confirmed-booking emails get the deterministic entry-instructions flow, not
+  // the Q&A bot.
+  if (isBookingEmail(parsed.text || null)) {
+    await handleBookingEmail({
+      rawText: parsed.text || "",
+      from,
+      to,
+      replyAddress,
+      subject: parsed.subject || null,
+      messageId: parsed.messageId || null,
+    });
+    return;
+  }
+
   const inquiry = parseInquiry(parsed.text || null);
   // Stable conversation identity (so follow-ups land in the same chatbox).
   const threadToken = computeThreadKey(from.name, inquiry, replyAddress);
@@ -314,6 +339,116 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     await generateDraftForConversation(conversation.id, message.id);
   } catch (e) {
     console.error("[gmail-inbound] draft generation error:", e);
+  }
+}
+
+// Deterministic flow for confirmed-booking emails: identify the studio + start
+// time and send the matching entry instructions (codes come from the DB-stored
+// templates). If we can't confidently resolve the studio/time/template, flag it
+// for a human instead of sending a wrong or blank code.
+async function handleBookingEmail(args: {
+  rawText: string;
+  from: { address: string | null; name: string | null; text: string | null };
+  to: { address: string | null; name: string | null; text: string | null };
+  replyAddress: string;
+  subject: string | null;
+  messageId: string | null;
+}): Promise<void> {
+  const info = parseBooking(args.rawText);
+  const threadToken = computeThreadKey(
+    args.from.name,
+    { listing: info.spaceText, dateTime: info.dateTimeText, attendees: null },
+    args.replyAddress
+  );
+  const summary =
+    `📅 Booking confirmed${info.spaceText ? " — " + info.spaceText : ""}` +
+    `${info.dateTimeText ? " · " + info.dateTimeText : ""}.` +
+    (info.guestNote ? `\n\nGuest note:\n${info.guestNote}` : "");
+
+  const { conversation, message, duplicate } = await storage.recordInboundEmail({
+    threadToken,
+    peerspaceReplyTo: args.replyAddress,
+    guestName: args.from.name,
+    guestEmail: null,
+    subject: args.subject,
+    fromAddress: args.from.text || args.from.address,
+    toAddress: args.to.address,
+    bodyText: summary.slice(0, MAX_BODY_CHARS),
+    bodyHtml: null,
+    providerMessageId: args.messageId,
+    rawJson: null,
+    inquiryDetails: JSON.stringify({
+      listing: info.spaceText,
+      dateTime: info.dateTimeText,
+      attendees: null,
+    }),
+  });
+  if (duplicate) return;
+
+  const subject = "Studio Clyx — your booking & entry instructions";
+
+  async function flag(reason: string) {
+    await storage.createAgentDraft({
+      conversationId: conversation.id,
+      inboundMessageId: message.id,
+      proposedSubject: subject,
+      proposedBodyText: null,
+      status: "pending",
+      needsHuman: true,
+      model: "booking",
+      error: reason,
+    });
+    try {
+      await sendAgentNovelQuestionAlert({
+        guestName: conversation.guestName ?? null,
+        question: summary,
+        missing: reason,
+        conversationId: conversation.id,
+      });
+    } catch (e) {
+      console.error("[gmail-inbound] booking alert failed:", e);
+    }
+  }
+
+  if (!info.studio) {
+    console.log(`[gmail-inbound] booking with undetermined studio (${conversation.id}); flagged`);
+    await flag("Couldn't determine which studio was booked — please send entry instructions manually.");
+    return;
+  }
+
+  const tpl = selectInstruction(info.studio, info.startMinutes);
+  if (!tpl.text) {
+    console.log(`[gmail-inbound] no instruction template for ${conversation.id}: ${tpl.reason}`);
+    await flag(tpl.reason ?? "No matching entry instructions are configured.");
+    return;
+  }
+
+  const draft = await storage.createAgentDraft({
+    conversationId: conversation.id,
+    inboundMessageId: message.id,
+    proposedSubject: subject,
+    proposedBodyText: tpl.text,
+    status: "pending",
+    model: "booking",
+  });
+
+  if (agentAutoSend()) {
+    const sent = await deliverReply({
+      conversation,
+      draftId: draft.id,
+      subject,
+      text: tpl.text,
+      auto: true,
+    });
+    console.log(
+      sent.ok
+        ? `[gmail-inbound] auto-sent ${info.studio} entry instructions for ${conversation.id}${sent.simulated ? " (simulation)" : ""}`
+        : `[gmail-inbound] auto-send instructions failed for ${conversation.id}: ${sent.error}`
+    );
+  } else {
+    console.log(
+      `[gmail-inbound] created ${info.studio} entry-instructions draft for ${conversation.id}`
+    );
   }
 }
 

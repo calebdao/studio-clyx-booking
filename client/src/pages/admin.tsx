@@ -22,9 +22,15 @@ import {
   useAgentDraftActions,
   useAgentKnowledge,
   useAgentKnowledgeMutations,
+  useAgentInstructions,
+  useSaveAgentInstructions,
   type AgentConversation,
   type AgentDraft,
 } from "@/lib/booking-store";
+import {
+  BOOKING_INSTRUCTION_KEYS,
+  BOOKING_INSTRUCTION_LABELS,
+} from "@shared/schema";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -265,6 +271,9 @@ function AdminConsole() {
           <TabsTrigger value="knowledge" data-testid="tab-knowledge">
             Knowledge
           </TabsTrigger>
+          <TabsTrigger value="instructions" data-testid="tab-instructions">
+            Access Instructions
+          </TabsTrigger>
         </TabsList>
 
         {/* PENDING */}
@@ -363,6 +372,11 @@ function AdminConsole() {
         {/* AGENT KNOWLEDGE BASE EDITOR */}
         <TabsContent value="knowledge">
           <KnowledgeTab />
+        </TabsContent>
+
+        {/* BOOKING ACCESS-INSTRUCTION TEMPLATES */}
+        <TabsContent value="instructions">
+          <InstructionsTab />
         </TabsContent>
       </Tabs>
 
@@ -1914,6 +1928,87 @@ function KnowledgeTab() {
             <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
           ) : null}
           Save knowledge
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ----- Booking access-instruction templates editor -----
+
+function InstructionsTab() {
+  const { data, isLoading } = useAgentInstructions();
+  const save = useSaveAgentInstructions();
+  const { toast } = useToast();
+  const [map, setMap] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (data && !loaded) {
+      setMap({ ...(data.instructions ?? {}) });
+      setLoaded(true);
+    }
+  }, [data, loaded]);
+
+  const busy = save.isPending;
+
+  async function doSave() {
+    try {
+      await save.mutateAsync(map);
+      toast({
+        title: "Access instructions saved",
+        description: "The bot will send these on new bookings — no redeploy.",
+      });
+    } catch (err) {
+      toast({
+        title: "Could not save",
+        description: (err instanceof Error ? err.message : "").replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="text-sm text-muted-foreground py-10 text-center">
+        <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+        Loading…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold">Booking access instructions</h2>
+        <p className="text-xs text-muted-foreground max-w-2xl mt-0.5">
+          The exact entry instructions sent to a guest when they book. Studio 1 &amp; 2
+          have a 9am–3pm and an after-hours version (chosen by booking start time);
+          Studio 3 and Lincoln have one each. These are stored privately in the
+          database (never in the code), so it's safe to put door codes here.
+        </p>
+      </div>
+
+      {BOOKING_INSTRUCTION_KEYS.map((key) => (
+        <div key={key} className="space-y-1">
+          <label className="text-xs font-medium">
+            {BOOKING_INSTRUCTION_LABELS[key]}
+          </label>
+          <Textarea
+            value={map[key] ?? ""}
+            onChange={(e) => setMap((m) => ({ ...m, [key]: e.target.value }))}
+            rows={8}
+            placeholder="Paste the entry instructions (with codes) for this space/time…"
+            className="text-sm"
+            data-testid={`textarea-instructions-${key}`}
+          />
+        </div>
+      ))}
+
+      <div className="flex justify-end">
+        <Button size="sm" disabled={busy} onClick={doSave}>
+          {busy ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
+          Save instructions
         </Button>
       </div>
     </div>

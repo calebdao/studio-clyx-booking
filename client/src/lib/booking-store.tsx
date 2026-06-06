@@ -510,3 +510,44 @@ export function useAgentKnowledgeMutations() {
   });
   return { save, reset };
 }
+
+// ----- Booking entry-instruction templates (admin Access Instructions tab) -----
+
+const AGENT_INSTRUCTIONS_KEY = ["/api/admin/agent/instructions"] as const;
+
+export function useAgentInstructions() {
+  const { adminPin } = useAdmin();
+  return useQuery<{ instructions: Record<string, string> }>({
+    queryKey: AGENT_INSTRUCTIONS_KEY,
+    enabled: !!adminPin,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const res = await apiRequest(
+        "GET",
+        "/api/admin/agent/instructions",
+        undefined,
+        { headers: { "x-admin-pin": adminPin ?? "" } }
+      );
+      return (await res.json()) as { instructions: Record<string, string> };
+    },
+  });
+}
+
+export function useSaveAgentInstructions() {
+  const { adminPin } = useAdmin();
+  const headers = { "x-admin-pin": adminPin ?? "" };
+  return useMutation({
+    mutationFn: async (instructions: Record<string, string>) => {
+      const res = await apiRequest(
+        "PUT",
+        "/api/admin/agent/instructions",
+        { instructions },
+        { headers }
+      );
+      return (await res.json()) as { ok: boolean };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: AGENT_INSTRUCTIONS_KEY });
+    },
+  });
+}

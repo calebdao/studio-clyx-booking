@@ -18,7 +18,8 @@ those on the host, not in the repo.
 ```bash
 # ---- Admin gate ----
 # Operator PIN. Without this, the gate falls back to "0000" (preview only).
-ADMIN_PIN=2457
+# Set the real value only on the host (Render) — never commit it.
+ADMIN_PIN=<your PIN>
 
 # ---- Resend (transactional email) ----
 # Get the key from https://resend.com/api-keys. NEVER paste it into a file
@@ -310,7 +311,7 @@ NODE_ENV=production node dist/index.cjs
    `client_email`, and enable the Calendar API on the project.
 4. Set `GOOGLE_SERVICE_ACCOUNT_JSON` plus the four `GOOGLE_CALENDAR_ID_*`
    env vars on the host.
-5. Set `ADMIN_PIN=2457` on the host.
+5. Set `ADMIN_PIN` to your chosen PIN on the host.
 6. Restart the server. `/api/integrations/status` should report `mode:
    "live"` for all three services. The next confirmed booking will deliver
    a real Resend email and write a Google Calendar event to the right

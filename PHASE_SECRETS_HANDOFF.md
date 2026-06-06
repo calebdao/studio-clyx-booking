@@ -4,7 +4,7 @@
 
 ### New files
 
-- **`.env.example`** — every required env var with safe placeholders. `ADMIN_PIN=2457`, `RESEND_FROM_ADDRESS='Studio Clyx <info@studioclyx.com>'`, all four space calendar IDs, plus placeholder `RESEND_API_KEY=re_REPLACE_ME` and a placeholder service-account `GOOGLE_SERVICE_ACCOUNT_JSON`.
+- **`.env.example`** — every required env var with safe placeholders. `ADMIN_PIN=<your PIN>`, `RESEND_FROM_ADDRESS='Studio Clyx <info@studioclyx.com>'`, all four space calendar IDs, plus placeholder `RESEND_API_KEY=re_REPLACE_ME` and a placeholder service-account `GOOGLE_SERVICE_ACCOUNT_JSON`.
 - **`server/google-calendar.ts`** — zero-dependency Calendar v3 client. Uses Node's built-in `crypto` to sign an RS256 JWT, exchanges it at `oauth2.googleapis.com/token` for an access token (cached in-memory until ~5 min before expiry), then talks directly to `calendar/v3` over `fetch`. Exports `parseServiceAccount`, `getServiceAccountError`, `getAccessToken`, `isCalendarLiveForSpace`, `calendarIdForSpace`, `listEventsForSpace`, `insertEventForBooking`, and the shared `SPACE_CALENDAR_ENV` map.
 - **`PHASE_SECRETS_HANDOFF.md`** — this file.
 
@@ -47,7 +47,7 @@
    - **Studio 1** is the primary calendar of `info@calebgladys.com` — log into that account, open Google Calendar → Settings → "Settings and sharing" for the primary calendar → "Share with specific people" → add the service account email → permission "Make changes to events".
    - For Studio 2, Studio 3, and Lincoln Apartment — open each calendar (the IDs starting with `c_…@group.calendar.google.com`) → "Settings and sharing" → same flow.
 4. **On the host (Vercel/Render/Fly/etc.), set these env vars exactly:**
-   - `ADMIN_PIN=2457`
+   - `ADMIN_PIN=` *(your chosen PIN — never commit the real value)*
    - `RESEND_API_KEY=` *(paste the real `re_…` key from https://resend.com/api-keys — never commit)*
    - `RESEND_FROM_ADDRESS='Studio Clyx <info@studioclyx.com>'`
    - `GOOGLE_SERVICE_ACCOUNT_JSON=` *(paste the full JSON from the downloaded key file, single-line; multi-line is fine if your host supports it — newlines inside `private_key` may also be `\n` escapes, the server normalizes)*

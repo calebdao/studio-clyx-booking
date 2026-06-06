@@ -46,7 +46,7 @@ Start Command: NODE_ENV=production node dist/index.cjs
 Do not hard-code secrets. Real values live in Render Environment Variables.
 
 ```env
-ADMIN_PIN=2457
+ADMIN_PIN=<set in Render — never commit the real value>
 RESEND_API_KEY=<secret>
 RESEND_FROM_ADDRESS=Studio Clyx <info@studioclyx.com>
 OWNER_ALERT_EMAILS=calebdao@gmail.com,<gladys email>

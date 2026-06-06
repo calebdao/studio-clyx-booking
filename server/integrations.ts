@@ -226,6 +226,50 @@ function getOwnerAlertRecipients() {
     .filter(Boolean);
 }
 
+// Alert the operator that the email bot hit a question it wasn't confident
+// answering (a novel question). Nothing was sent to the guest — it's waiting in
+// the admin Inbox.
+export async function sendAgentNovelQuestionAlert(args: {
+  guestName: string | null;
+  question: string;
+  missing: string | null;
+  conversationId: string;
+}) {
+  const to = getOwnerAlertRecipients();
+  if (to.length === 0) {
+    console.log(
+      `[integrations] simulation (OWNER_ALERT_EMAILS missing): novel-question alert for ${args.conversationId}`
+    );
+    return { ok: true, mode: "simulation" as const, reason: "OWNER_ALERT_EMAILS missing" };
+  }
+  const adminUrl = "https://studio-clyx-booking.onrender.com/#/admin";
+  const who = args.guestName || "A guest";
+  const q = (args.question || "").slice(0, 1000);
+  const subject = `Peerspace: ${who} asked something the bot couldn't answer`;
+  const text = [
+    `${who} sent a Peerspace message the assistant wasn't confident answering, so nothing was sent automatically.`,
+    args.missing ? `\nWhat it needs: ${args.missing}` : "",
+    `\nGuest message:\n${q}`,
+    `\nReview & reply in the admin Inbox: ${adminUrl}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const html =
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a">` +
+    `<p>${escapeHtml(who)} sent a Peerspace message the assistant wasn't confident answering, so nothing was sent automatically.</p>` +
+    (args.missing ? `<p><b>What it needs:</b> ${escapeHtml(args.missing)}</p>` : "") +
+    `<p><b>Guest message:</b></p><blockquote style="white-space:pre-wrap;border-left:3px solid #ddd;padding-left:10px;color:#444">${escapeHtml(q)}</blockquote>` +
+    `<p><a href="${adminUrl}">Review &amp; reply in the admin Inbox →</a></p></div>`;
+  return sendResendEmail({
+    to,
+    subject,
+    html,
+    text,
+    label: "agent novel-question alert",
+    bookingId: `agent:${args.conversationId}`,
+  });
+}
+
 function getOwnerReminderRecipient(): string {
   const raw = (process.env.OWNER_REMINDER_EMAIL ?? "").trim();
   return raw || DEFAULT_OWNER_REMINDER_EMAIL;

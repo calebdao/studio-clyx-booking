@@ -239,6 +239,7 @@ export const agentDrafts = sqliteTable("agent_drafts", {
   editedBody: text("edited_body"), // operator's edited plain-text override, if any
   model: text("model"),
   status: text("status").notNull().default("pending"), // pending | approved | rejected | sent | error
+  needsHuman: integer("needs_human", { mode: "boolean" }).notNull().default(false), // bot wasn't confident; do not auto-send
   reviewedBy: text("reviewed_by"),
   reviewedAt: integer("reviewed_at"),
   sentAt: integer("sent_at"),
@@ -271,6 +272,7 @@ export const agentDraftDtoSchema = z.object({
   editedBody: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
   status: z.enum(["pending", "approved", "rejected", "sent", "error"]),
+  needsHuman: z.boolean().optional(),
   reviewedAt: z.number().nullable().optional(),
   sentAt: z.number().nullable().optional(),
   resendId: z.string().nullable().optional(),
@@ -300,6 +302,7 @@ export type AgentConversationDto = z.infer<typeof agentConversationDtoSchema>;
 export const agentDraftActionSchema = z.object({
   action: z.enum(["approve", "reject", "edit"]),
   editedBody: z.string().trim().min(1).optional(),
+  teach: z.boolean().optional(), // on approve, append the guest Q + reply to the knowledge base
 });
 export type AgentDraftAction = z.infer<typeof agentDraftActionSchema>;
 

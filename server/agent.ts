@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { storage } from "./storage";
+import { sendAgentReplyEmail } from "./gmail";
+import { sendAgentNovelQuestionAlert } from "./integrations";
 import type { AgentConversationDto, BookingDto } from "@shared/schema";
 
 // ---------------------------------------------------------------------------
@@ -37,6 +39,27 @@ export function agentModel(): string {
   return process.env.AGENT_MODEL || DEFAULT_MODEL;
 }
 
+// Auto-send: when on, confident drafts are emailed automatically (no manual
+// approval). Off by default — flip on only when you trust the bot's answers.
+export function agentAutoSend(): boolean {
+  return (process.env.AGENT_AUTO_SEND ?? "").toLowerCase() === "true";
+}
+
+// Phrases that mean the reply is deferring to a human — never auto-send these,
+// even if the model marked itself confident.
+const ESCALATION_PHRASES = [
+  "team member will follow up",
+  "team will follow up",
+  "we'll follow up",
+  "we will follow up",
+  "get back to you",
+  "follow up personally",
+];
+function deferringToHuman(text: string): boolean {
+  const s = text.toLowerCase();
+  return ESCALATION_PHRASES.some((p) => s.includes(p));
+}
+
 export function agentStatus() {
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
   return {
@@ -47,6 +70,7 @@ export function agentStatus() {
     credentialConfigured: hasKey,
     knowledgeBaseFound: Boolean(loadKnowledgeBase()),
     knowledgeSource: getEffectiveKnowledge().source,
+    autoSend: agentAutoSend(),
   };
 }
 
@@ -207,16 +231,26 @@ function buildSystemPrompt(
 ): string {
   return [
     "You are the email assistant for Studio Clyx, replying to a guest who",
-    "contacted us through Peerspace. You are drafting a reply for a human",
-    "operator to review before it is sent — write the final email body only.",
+    "contacted us through Peerspace.",
     "",
-    "Use ONLY the knowledge base below for facts about spaces, pricing, policy,",
-    "and booking rules. Follow the guardrails in it strictly. Do not invent",
-    "availability, prices, or policies. Be warm, concise, and professional, and",
-    "sign off as \"Studio Clyx\".",
+    "CRITICAL: Answer ONLY using facts explicitly stated in the knowledge base",
+    "below. Never invent or guess availability, prices, fees, policies, amenities,",
+    "or any other fact. If the guest's question is not fully covered by the",
+    "knowledge base — or it needs human judgment (a pricing exception, a discount,",
+    "a dispute/refund, confirming a specific date is free, or anything sensitive)",
+    "— you are NOT confident.",
     "",
-    "Output plain text only: no subject line, no markdown, no placeholders like",
-    "[name] — write a complete, ready-to-send email body.",
+    "Respond with ONLY a single JSON object (no markdown, no code fences, nothing",
+    "else), in this exact shape:",
+    '{"confident": true|false, "reply": "<the full email body>", "missing": "<short note>"}',
+    "",
+    "- If the knowledge base fully covers the question: set confident=true, put a",
+    "  complete, ready-to-send plain-text email body in \"reply\" (warm, concise,",
+    "  professional; sign off as \"Studio Clyx\"; no placeholders like [name]), and",
+    "  set \"missing\" to \"\".",
+    "- Otherwise: set confident=false, set \"reply\" to \"\", and in \"missing\"",
+    "  briefly describe what information is needed to answer. Do NOT write a",
+    "  guessed reply.",
     "",
     "===== KNOWLEDGE BASE =====",
     knowledge,
@@ -291,11 +325,14 @@ async function callClaude(
     return {
       ok: true,
       simulated: true,
-      text:
-        "[SIMULATED DRAFT — ANTHROPIC_API_KEY not set]\n\n" +
-        "Hi there,\n\nThanks so much for reaching out about Studio Clyx! " +
-        "I'd be happy to help. (This is placeholder text generated without an " +
-        "AI key — set ANTHROPIC_API_KEY to get real drafts.)\n\nBest,\nStudio Clyx",
+      text: JSON.stringify({
+        confident: true,
+        reply:
+          "[SIMULATED DRAFT — ANTHROPIC_API_KEY not set]\n\nHi there,\n\nThanks " +
+          "so much for reaching out about Studio Clyx! (Placeholder reply — set " +
+          "ANTHROPIC_API_KEY for real drafts.)\n\nBest,\nStudio Clyx",
+        missing: "",
+      }),
     };
   }
   try {
@@ -336,6 +373,102 @@ function replySubject(convo: AgentConversationDto): string {
   const base = convo.subject?.trim();
   if (!base) return "Re: Your Studio Clyx inquiry";
   return /^re:/i.test(base) ? base : `Re: ${base}`;
+}
+
+interface StructuredReply {
+  confident: boolean;
+  reply: string;
+  missing: string;
+}
+
+// Parse the model's JSON answer leniently. Anything we can't parse, or that
+// claims confidence without a real reply, is treated as NOT confident — the safe
+// default (a human reviews it; nothing auto-sends).
+function parseStructured(text: string): StructuredReply {
+  let raw = text.trim();
+  // Strip ```json fences or stray prose around the object.
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) raw = fence[1].trim();
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first !== -1 && last > first) raw = raw.slice(first, last + 1);
+  try {
+    const o = JSON.parse(raw) as Partial<StructuredReply>;
+    const reply = typeof o.reply === "string" ? o.reply.trim() : "";
+    const confident = o.confident === true && reply.length > 0;
+    return {
+      confident,
+      reply,
+      missing: typeof o.missing === "string" ? o.missing.trim() : "",
+    };
+  } catch {
+    return {
+      confident: false,
+      reply: "",
+      missing: "The assistant's response could not be parsed.",
+    };
+  }
+}
+
+// Shared send path: email an approved/auto-approved reply into the Peerspace
+// thread, record the outbound message, and mark the draft sent. Used by both the
+// admin Approve button and auto-send.
+export async function deliverReply(args: {
+  conversation: AgentConversationDto;
+  draftId: string;
+  subject: string;
+  text: string;
+}): Promise<{ ok: boolean; simulated: boolean; error?: string }> {
+  const to = args.conversation.peerspaceReplyTo;
+  if (!to || !to.includes("@")) {
+    return { ok: false, simulated: false, error: "No reply address on this conversation." };
+  }
+  const send = await sendAgentReplyEmail({
+    to,
+    subject: args.subject,
+    text: args.text,
+    conversationId: args.conversation.id,
+  });
+  if (!send.ok) {
+    const error = ("error" in send && send.error) || "Failed to send reply.";
+    await storage.updateAgentDraft(args.draftId, { status: "error", error: String(error) });
+    return { ok: false, simulated: false, error: String(error) };
+  }
+  const providerId = "providerId" in send ? (send.providerId ?? null) : null;
+  await storage.addAgentMessage({
+    conversationId: args.conversation.id,
+    direction: "outbound",
+    fromAddress: process.env.GMAIL_USER || null,
+    toAddress: to,
+    subject: args.subject,
+    bodyText: args.text,
+    providerMessageId: providerId,
+  });
+  await storage.updateAgentDraft(args.draftId, {
+    status: "sent",
+    sentAt: Date.now(),
+    reviewedAt: Date.now(),
+    resendId: providerId,
+  });
+  return { ok: true, simulated: send.mode === "simulation" };
+}
+
+// Append an operator's answer to a guest question into the knowledge base (the
+// editable DB copy) under a "Learned answers" section, so the bot can handle
+// similar questions itself next time.
+export function appendLearnedAnswer(question: string, answer: string): void {
+  const q = question.trim();
+  const a = answer.trim();
+  if (!a) return;
+  const current = getEffectiveKnowledge().text || "";
+  const entry = `\n\n**Q: ${q || "(guest question)"}**\n${a}\n`;
+  const hasSection = /(^|\n)##\s*Learned answers/i.test(current);
+  const next = hasSection
+    ? current.replace(/\s*$/, "") + entry
+    : current.replace(/\s*$/, "") +
+      "\n\n## Learned answers\n\n_Added from operator replies to novel questions._\n" +
+      entry;
+  saveKnowledge(next);
 }
 
 // ----- Orchestration (called from the inbound route) -----
@@ -401,14 +534,69 @@ export async function generateDraftForConversation(
     return;
   }
 
-  await storage.createAgentDraft({
+  const model = result.simulated ? "simulation" : agentModel();
+  const structured = parseStructured(result.text ?? "");
+  const subject = replySubject(convo);
+
+  // Novel / not-confident → flag for a human, do NOT send, and alert the operator.
+  if (!structured.confident) {
+    await storage.createAgentDraft({
+      conversationId,
+      inboundMessageId,
+      proposedSubject: subject,
+      proposedBodyText: null,
+      status: "pending",
+      needsHuman: true,
+      model,
+      error:
+        structured.missing ||
+        "Not confident this question is covered by the knowledge base.",
+    });
+    console.log(
+      `[agent] novel question in conversation ${conversationId}; flagged for human`
+    );
+    try {
+      const lastInbound = [...convo.messages]
+        .reverse()
+        .find((m) => m.direction === "inbound");
+      await sendAgentNovelQuestionAlert({
+        guestName: convo.guestName ?? null,
+        question: lastInbound?.bodyText ?? convo.subject ?? "(no message)",
+        missing: structured.missing || null,
+        conversationId,
+      });
+    } catch (e) {
+      console.error("[agent] novel-question alert failed:", e);
+    }
+    return;
+  }
+
+  // Confident → create the draft. Auto-send only if enabled and the reply isn't
+  // itself deferring to a human.
+  const draft = await storage.createAgentDraft({
     conversationId,
     inboundMessageId,
-    proposedSubject: replySubject(convo),
-    proposedBodyText: result.text,
+    proposedSubject: subject,
+    proposedBodyText: structured.reply,
     status: "pending",
-    model: result.simulated ? "simulation" : agentModel(),
+    model,
   });
+
+  if (agentAutoSend() && !deferringToHuman(structured.reply)) {
+    const sent = await deliverReply({
+      conversation: convo,
+      draftId: draft.id,
+      subject,
+      text: structured.reply,
+    });
+    console.log(
+      sent.ok
+        ? `[agent] auto-sent reply for conversation ${conversationId}${sent.simulated ? " (simulation)" : ""}`
+        : `[agent] auto-send failed for ${conversationId}: ${sent.error}`
+    );
+    return;
+  }
+
   console.log(
     `[agent] created ${result.simulated ? "simulated " : ""}draft for conversation ${conversationId}`
   );

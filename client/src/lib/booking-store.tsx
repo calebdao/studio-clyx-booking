@@ -378,6 +378,7 @@ export type AgentDraft = {
   editedBody?: string | null;
   model?: string | null;
   status: "pending" | "approved" | "rejected" | "sent" | "error";
+  needsHuman?: boolean;
   reviewedAt?: number | null;
   sentAt?: number | null;
   resendId?: string | null;
@@ -431,14 +432,15 @@ export function useAgentDraftActions() {
       draftId: string;
       action: "approve" | "reject" | "edit";
       editedBody?: string;
+      teach?: boolean;
     }) => {
       const res = await apiRequest(
         "POST",
         `/api/admin/agent/drafts/${args.draftId}/action`,
-        { action: args.action, editedBody: args.editedBody },
+        { action: args.action, editedBody: args.editedBody, teach: args.teach },
         { headers }
       );
-      return (await res.json()) as { ok: boolean; simulated?: boolean };
+      return (await res.json()) as { ok: boolean; simulated?: boolean; taught?: boolean };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: AGENT_CONVERSATIONS_KEY });

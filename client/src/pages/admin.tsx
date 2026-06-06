@@ -1554,12 +1554,16 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
     ? pendingDraft.editedBody ?? pendingDraft.proposedBodyText ?? ""
     : "";
   const [text, setText] = useState(initial);
+  // "Teach": add this answer to the knowledge base on approve. Default on for
+  // novel (needs-human) questions, off for ones the bot already answered.
+  const [teach, setTeach] = useState(Boolean(pendingDraft?.needsHuman));
   useEffect(() => {
     setText(
       pendingDraft
         ? pendingDraft.editedBody ?? pendingDraft.proposedBodyText ?? ""
         : ""
     );
+    setTeach(Boolean(pendingDraft?.needsHuman));
     // Reset the editor whenever a different pending draft surfaces.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDraft?.id]);
@@ -1581,13 +1585,16 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
         draftId: pendingDraft.id,
         action,
         editedBody,
+        teach: action === "approve" ? teach : undefined,
       });
       if (action === "approve") {
         toast({
           title: r.simulated ? "Reply sent (simulation)" : "Reply sent",
-          description: r.simulated
-            ? "Resend isn't configured — the reply was logged, not emailed."
-            : "Your reply was sent back to the Peerspace thread.",
+          description:
+            (r.simulated
+              ? "Email isn't configured — the reply was logged, not sent."
+              : "Your reply was sent back to the Peerspace thread.") +
+            (r.taught ? " Added to the knowledge base." : ""),
         });
       } else if (action === "reject") {
         toast({ title: "Draft rejected", description: "Nothing was sent." });
@@ -1617,6 +1624,11 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {pendingDraft?.needsHuman && (
+            <span className="text-[10px] font-mono rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-300 px-2 py-0.5">
+              needs you
+            </span>
+          )}
           {convo.bookingId && (
             <span className="text-[10px] font-mono rounded-full bg-emerald-500/15 text-emerald-700 px-2 py-0.5">
               booking linked
@@ -1669,8 +1681,22 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
       <div className="px-4 py-3 border-t bg-muted/20">
         {pendingDraft ? (
           <div className="space-y-2">
+            {pendingDraft.needsHuman && (
+              <div className="text-xs rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300 px-3 py-2">
+                <span className="font-medium">🟡 Needs you — novel question.</span>{" "}
+                The bot wasn't confident the knowledge base covers this, so nothing
+                was sent. Write the answer below.
+                {pendingDraft.error ? (
+                  <div className="mt-1 text-amber-700/90 dark:text-amber-400/90">
+                    What it needs: {pendingDraft.error}
+                  </div>
+                ) : null}
+              </div>
+            )}
             <div className="flex items-center justify-between">
-              <span className="text-eyebrow">Proposed reply</span>
+              <span className="text-eyebrow">
+                {pendingDraft.needsHuman ? "Your reply" : "Proposed reply"}
+              </span>
               <span className="text-[10px] font-mono text-muted-foreground">
                 {pendingDraft.model || "draft"}
               </span>
@@ -1679,40 +1705,54 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={8}
+              placeholder={
+                pendingDraft.needsHuman ? "Write your reply to the guest…" : ""
+              }
               className="text-sm"
               data-testid={`textarea-draft-${pendingDraft.id}`}
             />
-            <div className="flex flex-wrap gap-2 justify-end">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => run("reject")}
-                data-testid={`button-reject-draft-${pendingDraft.id}`}
-              >
-                <X className="w-3.5 h-3.5 mr-1.5" /> Reject
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() => run("edit")}
-              >
-                Save edit
-              </Button>
-              <Button
-                size="sm"
-                disabled={busy || !text.trim()}
-                onClick={() => run("approve")}
-                data-testid={`button-approve-draft-${pendingDraft.id}`}
-              >
-                {busy ? (
-                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                ) : (
-                  <Send className="w-3.5 h-3.5 mr-1.5" />
-                )}
-                Approve &amp; send
-              </Button>
+            <div className="flex flex-wrap items-center gap-2 justify-between">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={teach}
+                  onChange={(e) => setTeach(e.target.checked)}
+                  className="accent-current"
+                />
+                Add to knowledge base
+              </label>
+              <div className="flex flex-wrap gap-2 justify-end">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => run("reject")}
+                  data-testid={`button-reject-draft-${pendingDraft.id}`}
+                >
+                  <X className="w-3.5 h-3.5 mr-1.5" /> Reject
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => run("edit")}
+                >
+                  Save edit
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={busy || !text.trim()}
+                  onClick={() => run("approve")}
+                  data-testid={`button-approve-draft-${pendingDraft.id}`}
+                >
+                  {busy ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  Approve &amp; send
+                </Button>
+              </div>
             </div>
           </div>
         ) : errorDraft ? (

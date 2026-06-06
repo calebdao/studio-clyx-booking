@@ -22,9 +22,31 @@ explains the flow, every file touched, the external accounts you need to set up
    **from calebandgladys@gmail.com via Gmail SMTP** (`server/gmail.ts`), and
    records the outbound message in the thread. The draft flips to `sent`.
 
-Nothing is ever sent automatically — a human approves every reply. Both halves
-(read + send) use the **one** Gmail account and its app password; there is no
-inbound email service, no extra domain, and no per-message cost.
+Both halves (read + send) use the **one** Gmail account and its app password;
+there is no inbound email service, no extra domain, and no per-message cost.
+
+## Confidence, auto-send, and learning
+
+Claude must answer **only** from the knowledge base and returns a structured
+`{confident, reply, missing}` JSON (parsed leniently; anything unparseable or
+without a real reply is treated as **not** confident — the safe default).
+
+- **Not confident / novel question** → a draft is flagged `needsHuman` (amber
+  "needs you" in the Inbox), **nothing is sent**, and the operator gets an email
+  alert (`sendAgentNovelQuestionAlert` → `OWNER_ALERT_EMAILS`). The operator
+  writes the answer in the Inbox.
+- **Confident** → a normal pending draft. If `AGENT_AUTO_SEND=true` **and** the
+  reply doesn't contain an escalation phrase ("a team member will follow up",
+  etc.), it's **auto-sent** via the shared `deliverReply()`; otherwise it waits
+  for manual approval.
+- **Learning** → approving a draft with the "Add to knowledge base" toggle
+  (`teach`, default **on** for novel questions) appends the guest's question +
+  the sent reply under a "## Learned answers" section of the editable knowledge
+  base (`appendLearnedAnswer`), so similar questions can be answered (and
+  auto-sent) next time.
+
+So with auto-send on, the bot answers what it knows and **escalates what it
+doesn't**, and your manual answers teach it for next time.
 
 ## Architecture decisions
 
@@ -80,6 +102,7 @@ as it is for the existing booking emails.)
 AGENT_ENABLED=true                       # exact string "true" to enable
 ANTHROPIC_API_KEY=sk-ant-…               # Claude; unset → simulation drafts
 AGENT_MODEL=claude-sonnet-4-6            # optional, this is the default
+AGENT_AUTO_SEND=false                    # "true" → auto-send confident replies (see below)
 GMAIL_USER=calebandgladys@gmail.com      # reads inbound (IMAP) + sends replies (SMTP)
 GMAIL_APP_PASSWORD=…                      # 16-char Gmail app password; unset → poller off + replies simulate
 # Optional poller tuning:

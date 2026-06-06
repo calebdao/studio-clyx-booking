@@ -22,7 +22,7 @@ import {
   sendOwnerBookingAlert,
   startHoldExpirySweeper,
 } from "./integrations";
-import { gmailStatus, sendAgentReplyEmail } from "./gmail";
+import { gmailStatus } from "./gmail";
 import {
   constructWebhookEvent,
   createDraftPaymentIntent,
@@ -35,6 +35,8 @@ import {
 import { sendSlotTakenRefundEmail } from "./integrations";
 import {
   agentStatus,
+  appendLearnedAnswer,
+  deliverReply,
   getEffectiveKnowledge,
   getKnowledgeFileDefault,
   resetKnowledgeToFile,
@@ -801,7 +803,7 @@ export async function registerRoutes(
     requireAdmin,
     async (req, res, next) => {
       try {
-        const { action, editedBody } = agentDraftActionSchema.parse(req.body);
+        const { action, editedBody, teach } = agentDraftActionSchema.parse(req.body);
         const draft = await storage.getAgentDraft(String(req.params.id));
         if (!draft) throw httpError(404, "Draft not found.");
         if (draft.status === "sent") {
@@ -827,10 +829,6 @@ export async function registerRoutes(
         // approve → send the reply back into the Peerspace thread.
         const convo = await storage.getAgentConversation(draft.conversationId);
         if (!convo) throw httpError(404, "Conversation not found.");
-        const to = convo.peerspaceReplyTo;
-        if (!to || !to.includes("@")) {
-          throw httpError(400, "No Reply-To address on this conversation.");
-        }
         // Persist a last-second edit passed alongside approve.
         if (editedBody && editedBody !== draft.editedBody) {
           await storage.updateAgentDraft(draft.id, { editedBody });
@@ -848,40 +846,26 @@ export async function registerRoutes(
               : `Re: ${convo.subject}`
             : "Re: Your Studio Clyx inquiry");
 
-        const send = await sendAgentReplyEmail({
-          to,
+        const sent = await deliverReply({
+          conversation: convo,
+          draftId: draft.id,
           subject,
           text: finalBody,
-          conversationId: convo.id,
         });
-        if (!send.ok) {
-          const error =
-            ("error" in send && send.error) || "Failed to send reply.";
-          await storage.updateAgentDraft(draft.id, {
-            status: "error",
-            error: String(error),
-          });
-          return res.status(502).json({ ok: false, error });
+        if (!sent.ok) {
+          return res.status(502).json({ ok: false, error: sent.error });
         }
-        const resendId =
-          "providerId" in send ? (send.providerId ?? null) : null;
-        // Record the outbound reply in the thread history.
-        await storage.addAgentMessage({
-          conversationId: convo.id,
-          direction: "outbound",
-          fromAddress: process.env.GMAIL_USER || null,
-          toAddress: to,
-          subject,
-          bodyText: finalBody,
-          providerMessageId: resendId,
-        });
-        await storage.updateAgentDraft(draft.id, {
-          status: "sent",
-          sentAt: Date.now(),
-          reviewedAt: Date.now(),
-          resendId,
-        });
-        res.json({ ok: true, simulated: send.mode === "simulation" });
+
+        // Optionally teach the bot: append the guest's question + this answer to
+        // the knowledge base so similar questions can be answered automatically.
+        if (teach) {
+          const lastInbound = [...convo.messages]
+            .reverse()
+            .find((m) => m.direction === "inbound");
+          appendLearnedAnswer(lastInbound?.bodyText ?? convo.subject ?? "", finalBody);
+        }
+
+        res.json({ ok: true, simulated: sent.simulated, taught: Boolean(teach) });
       } catch (e) {
         if (e instanceof ZodError) {
           return next(httpError(400, fromZodError(e).toString()));

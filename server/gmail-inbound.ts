@@ -214,9 +214,15 @@ function extractGuestMessage(raw: string | null): string | null {
   return text.length >= 3 ? text : raw.trim();
 }
 
-// Parse Peerspace's "Inquiry details" block (listing, date/time, attendees) into
-// a JSON string for booking context. Returns null if the section isn't present.
-function parseInquiryDetails(raw: string | null): string | null {
+interface InquiryDetails {
+  listing: string | null;
+  dateTime: string | null;
+  attendees: string | null;
+}
+
+// Parse Peerspace's "Inquiry details" block (listing, date/time, attendees).
+// Returns null if the section isn't present.
+function parseInquiry(raw: string | null): InquiryDetails | null {
   if (!raw || !/Inquiry details/i.test(raw)) return null;
   const text = raw.replace(/\r\n?/g, "\n");
   const valueAfter = (label: string): string | null => {
@@ -233,7 +239,26 @@ function parseInquiryDetails(raw: string | null): string | null {
   const dateTime = valueAfter("Date and time");
   const attendees = valueAfter("Attendees");
   if (!listing && !dateTime && !attendees) return null;
-  return JSON.stringify({ listing, dateTime, attendees });
+  return { listing, dateTime, attendees };
+}
+
+function norm(s: string | null | undefined): string {
+  return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// Group all emails of one Peerspace conversation together. Peerspace's Reply-To
+// token can differ between messages, so prefer a stable identity built from the
+// guest name + listing + requested date/time (the inquiry's identity); fall back
+// to the reply address when those aren't available.
+function computeThreadKey(
+  guestName: string | null,
+  inquiry: InquiryDetails | null,
+  fallbackAddress: string
+): string {
+  if (guestName && inquiry?.listing && inquiry?.dateTime) {
+    return `ps:${norm(guestName)}|${norm(inquiry.listing)}|${norm(inquiry.dateTime)}`;
+  }
+  return fallbackAddress.toLowerCase();
 }
 
 async function ingestRawEmail(source: Buffer): Promise<void> {
@@ -242,12 +267,16 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
   const to = firstAddress(parsed.to);
   const replyTo = firstAddress(parsed.replyTo);
 
-  // Thread on the Peerspace Reply-To address; fall back to From.
-  const threadToken = replyTo.address || from.address;
-  if (!threadToken) {
-    console.warn("[gmail-inbound] message had no resolvable thread token; skipping");
+  // The address we'll reply to (Peerspace's threaded Reply-To; fall back to From).
+  const replyAddress = replyTo.address || from.address;
+  if (!replyAddress) {
+    console.warn("[gmail-inbound] message had no resolvable reply address; skipping");
     return;
   }
+
+  const inquiry = parseInquiry(parsed.text || null);
+  // Stable conversation identity (so follow-ups land in the same chatbox).
+  const threadToken = computeThreadKey(from.name, inquiry, replyAddress);
 
   // Cap the stored body and DO NOT persist the HTML body. Peerspace HTML emails
   // can embed large base64 inline images (several MB); storing that and later
@@ -262,7 +291,7 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
 
   const { conversation, message, duplicate } = await storage.recordInboundEmail({
     threadToken,
-    peerspaceReplyTo: replyTo.text || replyTo.address,
+    peerspaceReplyTo: replyAddress, // where to send replies (latest wins)
     guestName: from.name,
     guestEmail: findGuestEmailInBody(rawText),
     subject: parsed.subject || null,
@@ -272,7 +301,7 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     bodyHtml: null, // never store HTML — see note above
     providerMessageId: parsed.messageId || null,
     rawJson: null,
-    inquiryDetails: parseInquiryDetails(rawText),
+    inquiryDetails: inquiry ? JSON.stringify(inquiry) : null,
   });
 
   if (duplicate) return;

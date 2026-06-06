@@ -827,8 +827,8 @@ export async function registerRoutes(
         // approve → send the reply back into the Peerspace thread.
         const convo = await storage.getAgentConversation(draft.conversationId);
         if (!convo) throw httpError(404, "Conversation not found.");
-        const to = convo.peerspaceReplyTo || convo.threadToken;
-        if (!to) {
+        const to = convo.peerspaceReplyTo;
+        if (!to || !to.includes("@")) {
           throw httpError(400, "No Reply-To address on this conversation.");
         }
         // Persist a last-second edit passed alongside approve.

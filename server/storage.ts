@@ -1190,8 +1190,8 @@ export class DatabaseStorage implements IStorage {
     } else {
       // Backfill any fields we now know but didn't before; reopen if closed.
       const set: Partial<AgentConversationRow> = { updatedAt: now };
-      if (!conversation.peerspaceReplyTo && args.peerspaceReplyTo)
-        set.peerspaceReplyTo = args.peerspaceReplyTo;
+      // Always refresh the reply-to to the latest message's address.
+      if (args.peerspaceReplyTo) set.peerspaceReplyTo = args.peerspaceReplyTo;
       if (!conversation.guestName && args.guestName)
         set.guestName = args.guestName;
       if (!conversation.guestEmail && args.guestEmail)

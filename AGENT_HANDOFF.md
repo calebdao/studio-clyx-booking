@@ -167,9 +167,12 @@ ingestion only happens through the Gmail poller.)
 
 1. **Booking match precision.** Peerspace masks guest emails, so matching falls
    back to name + recency. Refine if you see mis-links (`matchBookingForConversation`).
-2. **Reply-To extraction.** Thread token comes from the parsed Reply-To/From
-   address. Once you see real Peerspace headers, tighten it if their format
-   differs from the assumed `local+token@…` shape.
+2. **Thread grouping.** Conversations are keyed by a composite identity (guest
+   name + listing + requested date/time) so all emails of one Peerspace inquiry
+   group into one chatbox and the bot sees the full history; the reply address is
+   stored separately (`peerspaceReplyTo`, latest wins) for sending. Falls back to
+   the reply address when inquiry details aren't parseable. See
+   `computeThreadKey()` in `server/gmail-inbound.ts`.
 3. **Sender match.** `PEERSPACE_SENDER_MATCH` defaults to `peerspace.com`. If
    Peerspace sends from a different domain, set it accordingly (or point
    `AGENT_INBOX_FOLDER` at a dedicated Gmail label populated by a filter).

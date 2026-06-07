@@ -2,7 +2,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser, type AddressObject } from "mailparser";
 import { storage } from "./storage";
 import {
-  agentAutoSend,
+  agentAutoSendInstructions,
   agentEnabled,
   deliverReply,
   generateDraftForConversation,
@@ -468,7 +468,7 @@ async function handleBookingEmail(args: {
     model: "booking",
   });
 
-  if (agentAutoSend()) {
+  if (agentAutoSendInstructions()) {
     const sent = await deliverReply({
       conversation,
       draftId: draft.id,

@@ -39,10 +39,21 @@ export function agentModel(): string {
   return process.env.AGENT_MODEL || DEFAULT_MODEL;
 }
 
-// Auto-send: when on, confident drafts are emailed automatically (no manual
-// approval). Off by default — flip on only when you trust the bot's answers.
+// Auto-send: when on, confident *Q&A reply* drafts are emailed automatically (no
+// manual approval). Off by default — flip on only when you trust the bot's answers.
 export function agentAutoSend(): boolean {
   return (process.env.AGENT_AUTO_SEND ?? "").toLowerCase() === "true";
+}
+
+// Auto-send for *booking entry instructions* — independent of Q&A auto-send, since
+// instructions are deterministic verbatim templates (no AI). Also on whenever the
+// global auto-send is on. Lets you auto-send instructions while keeping replies
+// in draft mode.
+export function agentAutoSendInstructions(): boolean {
+  return (
+    (process.env.AGENT_AUTO_SEND_INSTRUCTIONS ?? "").toLowerCase() === "true" ||
+    agentAutoSend()
+  );
 }
 
 // Phrases that mean the reply is deferring to a human — never auto-send these,
@@ -71,6 +82,7 @@ export function agentStatus() {
     knowledgeBaseFound: Boolean(loadKnowledgeBase()),
     knowledgeSource: getEffectiveKnowledge().source,
     autoSend: agentAutoSend(),
+    autoSendInstructions: agentAutoSendInstructions(),
   };
 }
 

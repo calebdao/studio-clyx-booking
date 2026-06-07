@@ -54,6 +54,9 @@ AGENT_MODEL=claude-sonnet-4-6
 # Auto-send confident replies without manual approval (default false). Novel
 # questions are never auto-sent — they're flagged in the Inbox + emailed to you.
 AGENT_AUTO_SEND=false
+# Auto-send booking entry instructions (deterministic templates) independently of
+# Q&A replies — lets you auto-send instructions while replies stay in draft.
+AGENT_AUTO_SEND_INSTRUCTIONS=true
 # Gmail account linked to Peerspace. Used for BOTH reading inbound Peerspace
 # emails (IMAP poller) and sending approved replies (SMTP). Requires 2-Step
 # Verification + an app password (NOT the login password) and IMAP enabled in

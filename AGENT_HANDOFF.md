@@ -38,8 +38,13 @@ are handled deterministically, NOT by the LLM:
   (`app_settings` key `booking_instructions`), edited via the admin **Access
   Instructions** tab — never committed (the repo is public).
 - The chosen template is sent verbatim through `deliverReply` (auto when
-  `AGENT_AUTO_SEND` is on, else a draft). If the studio/time/template can't be
-  resolved, it's flagged `needsHuman` + emailed — never a wrong/blank code.
+  `AGENT_AUTO_SEND_INSTRUCTIONS` — or the global `AGENT_AUTO_SEND` — is on, else a
+  draft). Instructions auto-send is independent of Q&A auto-send, so you can
+  auto-send instructions while keeping AI replies in draft. If the
+  studio/time/template can't be resolved, it's flagged `needsHuman` + emailed —
+  never a wrong/blank code.
+- For events / after-hours bookings, the building-security closing-up note is
+  appended (see `EVENT_SECURITY_NOTE` / `looksLikeEvent`).
 
 ## Confidence, auto-send, and learning
 
@@ -118,7 +123,8 @@ as it is for the existing booking emails.)
 AGENT_ENABLED=true                       # exact string "true" to enable
 ANTHROPIC_API_KEY=sk-ant-…               # Claude; unset → simulation drafts
 AGENT_MODEL=claude-sonnet-4-6            # optional, this is the default
-AGENT_AUTO_SEND=false                    # "true" → auto-send confident replies (see below)
+AGENT_AUTO_SEND=false                    # "true" → auto-send confident Q&A replies (see below)
+AGENT_AUTO_SEND_INSTRUCTIONS=true        # "true" → auto-send booking entry instructions (independent of Q&A)
 GMAIL_USER=calebandgladys@gmail.com      # reads inbound (IMAP) + sends replies (SMTP)
 GMAIL_APP_PASSWORD=…                      # 16-char Gmail app password; unset → poller off + replies simulate
 # Optional poller tuning:

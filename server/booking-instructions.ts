@@ -38,12 +38,15 @@ export function isBookingEmail(text: string | null): boolean {
   return /view booking/i.test(text) || /payment details/i.test(text);
 }
 
-// Peerspace "Your booking … is coming up" reminder emails — not a new booking and
-// not a guest message, so the agent should ignore them entirely.
+// Peerspace booking reminders ("… is coming up" / "… starts soon") — not a new
+// booking and not a guest message, so the agent should ignore them entirely.
 export function isBookingReminder(text: string | null): boolean {
   if (!text) return false;
   return (
     /\bis coming up\b/i.test(text) ||
+    /\bstarts soon\b/i.test(text) ||
+    /your booking starts\b/i.test(text) ||
+    /make sure to greet\b/i.test(text) ||
     /finalize any last[\s-]*minute details/i.test(text)
   );
 }

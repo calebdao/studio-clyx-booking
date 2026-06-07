@@ -84,6 +84,7 @@ const DEFAULT_IGNORE_SUBJECTS = [
   "request expired",
   "refund",
   "coming up",
+  "starts soon",
   "action required",
   "respond now",
   "response rate",

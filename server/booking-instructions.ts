@@ -26,16 +26,25 @@ export interface BookingInfo {
   guestNote: string | null; // any message the guest included with the booking
 }
 
-// A confirmed-booking email has a "Booking details" block plus booking signals.
-// Inquiries instead say "Inquiry details" / "Estimated payout", so this won't
-// misfire on them.
+// A confirmed-booking email has a "Booking details" block AND the
+// confirmation-only signals "View booking" / "Payment details". Inquiries say
+// "Inquiry details" / "Estimated payout"; booking *reminders* ("is coming up")
+// also have "Booking details" + "Payout" but NOT these — so requiring them keeps
+// us from re-sending instructions on a reminder. Also gate on isBookingReminder.
 export function isBookingEmail(text: string | null): boolean {
   if (!text) return false;
+  if (isBookingReminder(text)) return false;
   if (!/(^|\n)\s*Booking details/i.test(text)) return false;
+  return /view booking/i.test(text) || /payment details/i.test(text);
+}
+
+// Peerspace "Your booking … is coming up" reminder emails — not a new booking and
+// not a guest message, so the agent should ignore them entirely.
+export function isBookingReminder(text: string | null): boolean {
+  if (!text) return false;
   return (
-    /view booking/i.test(text) ||
-    /payment details/i.test(text) ||
-    /(^|\n)\s*Payout\b/i.test(text)
+    /\bis coming up\b/i.test(text) ||
+    /finalize any last[\s-]*minute details/i.test(text)
   );
 }
 

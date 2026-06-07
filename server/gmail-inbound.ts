@@ -9,6 +9,7 @@ import {
 } from "./agent";
 import {
   isBookingEmail,
+  isBookingReminder,
   parseBooking,
   selectInstruction,
 } from "./booking-instructions";
@@ -82,6 +83,7 @@ const DEFAULT_IGNORE_SUBJECTS = [
   "booking declined",
   "request expired",
   "refund",
+  "coming up",
 ];
 
 function csvEnv(name: string): string[] | null {
@@ -282,6 +284,14 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
   const replyAddress = replyTo.address || from.address;
   if (!replyAddress) {
     console.warn("[gmail-inbound] message had no resolvable reply address; skipping");
+    return;
+  }
+
+  // Booking reminders ("your booking … is coming up") are neither a new booking
+  // nor a guest message — ignore them entirely (don't reply, don't re-send
+  // instructions).
+  if (isBookingReminder(parsed.text || null)) {
+    console.log("[gmail-inbound] booking reminder ('coming up'); skipping");
     return;
   }
 

@@ -84,7 +84,22 @@ const DEFAULT_IGNORE_SUBJECTS = [
   "request expired",
   "refund",
   "coming up",
+  "action required",
+  "respond now",
+  "response rate",
 ];
+
+// Peerspace operational nudges to the host (response-rate prompts, "respond now"
+// payout reminders, etc.) are signed by the "Host success team" and aren't guest
+// messages — a reliable body-level backstop in case the subject varies.
+function isHostOpsEmail(text: string | null): boolean {
+  if (!text) return false;
+  return (
+    /host success team/i.test(text) ||
+    /protect your response rate/i.test(text) ||
+    (/\brespond now\b/i.test(text) && /response rate/i.test(text))
+  );
+}
 
 function csvEnv(name: string): string[] | null {
   const v = process.env[name];
@@ -292,6 +307,12 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
   // instructions).
   if (isBookingReminder(parsed.text || null)) {
     console.log("[gmail-inbound] booking reminder ('coming up'); skipping");
+    return;
+  }
+
+  // Peerspace host-ops nudges (respond now / response rate / payout reminders).
+  if (isHostOpsEmail(parsed.text || null)) {
+    console.log("[gmail-inbound] Peerspace host-ops nudge; skipping");
     return;
   }
 

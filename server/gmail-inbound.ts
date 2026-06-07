@@ -8,6 +8,7 @@ import {
   generateDraftForConversation,
 } from "./agent";
 import {
+  EVENT_SECURITY_NOTE,
   isBookingEmail,
   isBookingReminder,
   parseBooking,
@@ -455,11 +456,14 @@ async function handleBookingEmail(args: {
     return;
   }
 
+  // For events, append the building-security / closing-up note.
+  const finalText = info.isEvent ? tpl.text + EVENT_SECURITY_NOTE : tpl.text;
+
   const draft = await storage.createAgentDraft({
     conversationId: conversation.id,
     inboundMessageId: message.id,
     proposedSubject: subject,
-    proposedBodyText: tpl.text,
+    proposedBodyText: finalText,
     status: "pending",
     model: "booking",
   });
@@ -469,7 +473,7 @@ async function handleBookingEmail(args: {
       conversation,
       draftId: draft.id,
       subject,
-      text: tpl.text,
+      text: finalText,
       auto: true,
     });
     console.log(

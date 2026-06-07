@@ -24,6 +24,51 @@ export interface BookingInfo {
   dateTimeText: string | null; // human-readable date/time for display
   spaceText: string | null; // the "Space" line from the email
   guestNote: string | null; // any message the guest included with the booking
+  attendees: number | null;
+  isEvent: boolean; // looks like an event (DJ/party/etc. or large group)
+}
+
+// Appended to entry instructions for event bookings (no door codes — safe here).
+export const EVENT_SECURITY_NOTE =
+  "\n\n— Building security (events) —\n" +
+  "You're welcome to prop the building's main doors open during your event for " +
+  "easy guest access. When your event ends, please close the building's main " +
+  "doors and return the keys to the lockbox, then send us photos confirming both " +
+  "— this helps keep the whole building secure.";
+
+// Event signals come from the GUEST'S note (and attendee count) — never the
+// listing name, since Studio 3's listing literally contains "Event Loft".
+const EVENT_KEYWORDS = [
+  /\bevent\b/i,
+  /\bparty\b/i,
+  /\bdj\b/i,
+  /birthday/i,
+  /celebrat/i,
+  /\bshower\b/i,
+  /reception/i,
+  /wedding/i,
+  /anniversary/i,
+  /\blaunch\b/i,
+  /activation/i,
+  /pop[\s-]?up/i,
+  /screening/i,
+  /\bmixer\b/i,
+  /gathering/i,
+  /fundraiser/i,
+  /networking/i,
+  /\brave\b/i,
+];
+
+function parseAttendees(text: string): number | null {
+  const m = text.match(/Attendees\s*\n+\s*(\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+function looksLikeEvent(guestNote: string | null, attendees: number | null): boolean {
+  const note = guestNote || "";
+  if (EVENT_KEYWORDS.some((re) => re.test(note))) return true;
+  if (attendees != null && attendees >= 20) return true;
+  return false;
 }
 
 // A confirmed-booking email has a "Booking details" block AND the
@@ -125,12 +170,16 @@ function parseGuestNote(text: string): string | null {
 
 export function parseBooking(text: string): BookingInfo {
   const spaceText = valueAfter(text, "Space");
+  const guestNote = parseGuestNote(text);
+  const attendees = parseAttendees(text);
   return {
     studio: detectStudio(text),
     startMinutes: parseStartMinutes(text),
     dateTimeText: parseDateTimeText(text),
     spaceText,
-    guestNote: parseGuestNote(text),
+    guestNote,
+    attendees,
+    isEvent: looksLikeEvent(guestNote, attendees),
   };
 }
 

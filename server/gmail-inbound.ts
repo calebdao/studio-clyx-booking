@@ -15,6 +15,7 @@ import {
   selectInstruction,
 } from "./booking-instructions";
 import { sendAgentNovelQuestionAlert } from "./integrations";
+import { handleGiggsterEmail, isGiggsterEmail } from "./giggster-buffers";
 
 // ---------------------------------------------------------------------------
 // Gmail IMAP poller for the Peerspace email-reply agent.
@@ -40,6 +41,9 @@ import { sendAgentNovelQuestionAlert } from "./integrations";
 
 function senderMatch(): string {
   return process.env.PEERSPACE_SENDER_MATCH || "peerspace.com";
+}
+function giggsterMatch(): string {
+  return process.env.GIGGSTER_SENDER_MATCH || "giggster.com";
 }
 function inboxFolder(): string {
   return process.env.AGENT_INBOX_FOLDER || "INBOX";
@@ -297,6 +301,13 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
   const to = firstAddress(parsed.to);
   const replyTo = firstAddress(parsed.replyTo);
 
+  // Giggster confirmation emails → place calendar buffers; never the Q&A/booking
+  // flows.
+  if (isGiggsterEmail(from.address)) {
+    await handleGiggsterEmail(parsed.subject || null, parsed.text || null);
+    return;
+  }
+
   // The address we'll reply to (Peerspace's threaded Reply-To; fall back to From).
   const replyAddress = replyTo.address || from.address;
   if (!replyAddress) {
@@ -507,8 +518,12 @@ async function pollOnce(): Promise<number> {
   try {
     const lock = await client.getMailboxLock(inboxFolder());
     try {
+      // Unread mail from Peerspace OR Giggster.
       const uids = await client.search(
-        { seen: false, from: senderMatch() },
+        {
+          seen: false,
+          or: [{ from: senderMatch() }, { from: giggsterMatch() }],
+        },
         { uid: true }
       );
       if (!uids || uids.length === 0) return 0;
@@ -517,7 +532,7 @@ async function pollOnce(): Promise<number> {
       const batch = uids.slice(0, maxPerPoll());
       if (uids.length > batch.length) {
         console.log(
-          `[gmail-inbound] ${uids.length} unread Peerspace email(s) found; handling ${batch.length} this cycle, rest next poll`
+          `[gmail-inbound] ${uids.length} unread email(s) found; handling ${batch.length} this cycle, rest next poll`
         );
       }
       for (const uid of batch) {
@@ -530,7 +545,11 @@ async function pollOnce(): Promise<number> {
             { uid: true }
           );
           const subject = (head && head.envelope?.subject) || "";
-          if (!isActionableSubject(subject)) {
+          const fromAddr =
+            (head && head.envelope?.from?.[0]?.address) || "";
+          // Giggster confirmations bypass the subject filter (they trigger the
+          // calendar-buffer flow, not Q&A).
+          if (!isGiggsterEmail(fromAddr) && !isActionableSubject(subject)) {
             console.log(
               `[gmail-inbound] skipping non-message email (subject: "${subject.slice(0, 80)}")`
             );

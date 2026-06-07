@@ -364,6 +364,56 @@ export async function insertHoldEventForBooking(
 }
 
 /**
+ * Insert a generic timed event (e.g. a Giggster buffer block) on a space's
+ * calendar. start/end are ISO strings (UTC ok). Tagged via summary + a private
+ * extended property so it can be found and replaced later.
+ */
+export async function insertSimpleEvent(
+  spaceId: BookingDto["spaceId"],
+  summary: string,
+  startIso: string,
+  endIso: string,
+  privateProps?: Record<string, string>
+): Promise<
+  | { ok: true; eventId: string }
+  | { ok: false; reason?: string; error?: string }
+> {
+  if (!isCalendarLiveForSpace(spaceId)) {
+    return { ok: false, reason: "calendar not configured for this space" };
+  }
+  try {
+    const token = await getAccessToken();
+    if (!token) return { ok: false, reason: "Could not obtain access token" };
+    const calendarId = calendarIdForSpace(spaceId)!;
+    const url = new URL(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`
+    );
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        summary,
+        start: { dateTime: startIso },
+        end: { dateTime: endIso },
+        transparency: "opaque",
+        extendedProperties: { private: privateProps ?? {} },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, error: `insert event ${res.status}: ${text}` };
+    }
+    const json = (await res.json()) as { id: string };
+    return { ok: true, eventId: json.id };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
  * Patch an existing Google Calendar event to mark it confirmed.
  * Used by the confirm flow so a single event transitions from tentative
  * (hold) to confirmed without leaving an extra event behind. If the event

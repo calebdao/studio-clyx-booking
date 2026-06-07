@@ -46,15 +46,19 @@ are handled deterministically, NOT by the LLM:
 - For events / after-hours bookings, the building-security closing-up note is
   appended (see `EVENT_SECURITY_NOTE` / `looksLikeEvent`).
 
-## Giggster buffers
+## Booking buffers (Giggster + direct bookings)
 
-A confirmed-booking email from **giggster.com** ("Confirmed Booking Details: …")
-triggers calendar buffers, not the Q&A/booking flows:
+`server/booking-buffers.ts` places a **30-min buffer event before and after** a
+booking on the studio's Google Calendar (`AGENT_BUFFER_MINUTES`, default 30) via
+`applyBookingBuffers(studio, startEpoch, endEpoch)`. Two triggers:
 
-- `server/giggster-buffers.ts` parses the studio (STUDIO CLYX I/II/III roman
+- **Confirmed studioclyx.com bookings** — called from the confirm flow in
+  `routes.ts` (`runConfirmChain` for Zelle, and the Stripe no-hold card path).
+  `removeBookingBuffers` is called on reject/release so buffers don't orphan.
+- **Giggster** — a confirmed-booking email from **giggster.com** ("Confirmed
+  Booking Details: …") is parsed for the studio (STUDIO CLYX I/II/III roman
   numeral), date, and time range from the email body (NY local, DST-correct via
-  `Intl`), then places a **30-min buffer event before and after** the booking on
-  that studio's Google Calendar (`AGENT_GIGGSTER_BUFFER_MINUTES`, default 30).
+  `Intl`), then buffered the same way.
 - Buffers are **trimmed so they never overlap a real (non-buffer) event** —
   Peerspace, direct, or other bookings — and **tagged** (`BUFFER_TAG` in the
   summary) so re-runs replace our own buffers instead of stacking. We only ever

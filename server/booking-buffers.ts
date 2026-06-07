@@ -8,20 +8,25 @@ import {
 import type { BookingDto } from "@shared/schema";
 
 // ---------------------------------------------------------------------------
-// Giggster buffers: when a Giggster "Confirmed Booking Details" email arrives,
-// place a 30-min buffer event before and after the booking on that studio's
-// Google Calendar — so Peerspace, Giggster, and our own site all see the buffer
-// as busy. Buffers are trimmed so they never overlap a real booking, and tagged
-// so re-runs replace our own buffers rather than stacking them.
+// Booking buffers: place a 30-min buffer event before and after a booking on the
+// studio's Google Calendar — so Peerspace, Giggster, and our own site all see the
+// buffer as busy. Buffers are trimmed so they never overlap a real booking, and
+// tagged so re-runs replace our own buffers rather than stacking them. Triggered
+// by Giggster confirmation emails (below) and by confirmed studioclyx.com bookings
+// (applyBookingBuffers, called from the confirm flow in routes.ts).
 // ---------------------------------------------------------------------------
 
 type SpaceId = BookingDto["spaceId"];
 
 export const BUFFER_TAG = "Studio Clyx buffer";
-const BUFFER_SUMMARY = `${BUFFER_TAG} — do not book (Giggster setup/teardown)`;
+const BUFFER_SUMMARY = `${BUFFER_TAG} — do not book (setup/teardown buffer)`;
 
 export function bufferMinutes(): number {
-  const n = Number(process.env.AGENT_GIGGSTER_BUFFER_MINUTES || 30);
+  const n = Number(
+    process.env.AGENT_BUFFER_MINUTES ||
+      process.env.AGENT_GIGGSTER_BUFFER_MINUTES ||
+      30
+  );
   return Math.max(0, Number.isFinite(n) ? n : 30);
 }
 
@@ -153,11 +158,13 @@ function isOurBuffer(summary?: string): boolean {
 const iso = (epoch: number) => new Date(epoch).toISOString();
 
 // Place trimmed buffer events around a booking; replace our own existing buffers
-// in the window first. Never overlaps a real (non-buffer) event.
-export async function applyGiggsterBuffers(
-  booking: GiggsterBooking
+// in the window first. Never overlaps a real (non-buffer) event. Used for both
+// Giggster bookings and confirmed studioclyx.com bookings.
+export async function applyBookingBuffers(
+  studio: SpaceId,
+  startEpoch: number,
+  endEpoch: number
 ): Promise<{ ok: boolean; created: number; reason?: string }> {
-  const { studio, startEpoch, endEpoch } = booking;
   const calendarId = calendarIdForSpace(studio);
   if (!isCalendarLiveForSpace(studio) || !calendarId) {
     return { ok: false, created: 0, reason: `calendar not live for ${studio}` };
@@ -209,16 +216,44 @@ export async function applyGiggsterBuffers(
       studioClyxBuffer: "1",
     });
     if (r.ok) created++;
-    else console.error("[giggster] pre-buffer insert failed:", r.error || r.reason);
+    else console.error("[buffers] pre-buffer insert failed:", r.error || r.reason);
   }
   if (endEpoch < postEnd) {
     const r = await insertSimpleEvent(studio, BUFFER_SUMMARY, iso(endEpoch), iso(postEnd), {
       studioClyxBuffer: "1",
     });
     if (r.ok) created++;
-    else console.error("[giggster] post-buffer insert failed:", r.error || r.reason);
+    else console.error("[buffers] post-buffer insert failed:", r.error || r.reason);
   }
   return { ok: true, created };
+}
+
+// Remove our buffer events around a booking window (e.g. when the booking is
+// cancelled/released and its calendar event is removed). Best-effort.
+export async function removeBookingBuffers(
+  studio: SpaceId,
+  startEpoch: number,
+  endEpoch: number
+): Promise<void> {
+  const calendarId = calendarIdForSpace(studio);
+  if (!isCalendarLiveForSpace(studio) || !calendarId) return;
+  const bm = bufferMinutes();
+  const winStartMs = startEpoch - bm * 60000;
+  const winEndMs = endEpoch + bm * 60000;
+  const res = await listEventsForSpace(
+    studio,
+    new Date(winStartMs - 5 * 60000),
+    new Date(winEndMs + 5 * 60000)
+  );
+  if (!res.ok) return;
+  for (const e of res.events) {
+    if (!isOurBuffer(e.summary)) continue;
+    const es = new Date(e.start).getTime();
+    const ee = new Date(e.end).getTime();
+    if (ee > winStartMs && es < winEndMs) {
+      await deleteEvent(e.id, calendarId).catch(() => {});
+    }
+  }
 }
 
 // Entry point from the inbound poller for a Giggster email.
@@ -235,7 +270,11 @@ export async function handleGiggsterEmail(
     console.warn("[giggster] confirmation email but couldn't parse studio/date/time; skipping");
     return;
   }
-  const result = await applyGiggsterBuffers(booking);
+  const result = await applyBookingBuffers(
+    booking.studio,
+    booking.startEpoch,
+    booking.endEpoch
+  );
   console.log(
     `[giggster] ${booking.studio} ${new Date(booking.startEpoch).toISOString()}–${new Date(
       booking.endEpoch

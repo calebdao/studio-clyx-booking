@@ -28,6 +28,7 @@ import {
   getInstructionTemplates,
   saveInstructionTemplates,
 } from "./booking-instructions";
+import { applyBookingBuffers, removeBookingBuffers } from "./booking-buffers";
 import {
   constructWebhookEvent,
   createDraftPaymentIntent,
@@ -439,6 +440,16 @@ export async function registerRoutes(
         error: e instanceof Error ? e.message : String(e),
       };
     }
+    // Place 30-min buffers before/after this confirmed booking on the calendar.
+    try {
+      await applyBookingBuffers(
+        booking.spaceId,
+        new Date(booking.start).getTime(),
+        new Date(booking.end).getTime()
+      );
+    } catch (e) {
+      console.error("booking buffer placement error", e);
+    }
     return { booking, calendar, email };
   }
 
@@ -466,6 +477,17 @@ export async function registerRoutes(
           console.error("reject calendar cleanup error", e);
         }
       }
+      if (booking) {
+        try {
+          await removeBookingBuffers(
+            booking.spaceId,
+            new Date(booking.start).getTime(),
+            new Date(booking.end).getTime()
+          );
+        } catch (e) {
+          console.error("reject buffer cleanup error", e);
+        }
+      }
       res.json({ ok: true, booking });
     } catch (e) {
       next(e);
@@ -480,6 +502,17 @@ export async function registerRoutes(
           await removeCalendarEvent(existing);
         } catch (e) {
           console.error("release calendar cleanup error", e);
+        }
+      }
+      if (existing) {
+        try {
+          await removeBookingBuffers(
+            existing.spaceId,
+            new Date(existing.start).getTime(),
+            new Date(existing.end).getTime()
+          );
+        } catch (e) {
+          console.error("release buffer cleanup error", e);
         }
       }
       const ok = await storage.releaseBooking(String(req.params.id));
@@ -719,6 +752,16 @@ export async function registerRoutes(
                 `[stripe] owner alert failed for ${booking.id}:`,
                 e
               );
+            }
+            // Place 30-min buffers before/after this confirmed card booking.
+            try {
+              await applyBookingBuffers(
+                booking.spaceId,
+                new Date(booking.start).getTime(),
+                new Date(booking.end).getTime()
+              );
+            } catch (e) {
+              console.error(`[stripe] buffer placement failed for ${booking.id}:`, e);
             }
             console.log(
               `[stripe] webhook: materialized confirmed booking ${booking.id} from PI ${pi.id}`

@@ -15,7 +15,7 @@ import {
   selectInstruction,
 } from "./booking-instructions";
 import { sendAgentNovelQuestionAlert } from "./integrations";
-import { handleGiggsterEmail, isGiggsterEmail } from "./giggster-buffers";
+import { handleGiggsterEmail, isGiggsterEmail } from "./booking-buffers";
 
 // ---------------------------------------------------------------------------
 // Gmail IMAP poller for the Peerspace email-reply agent.

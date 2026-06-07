@@ -272,6 +272,17 @@ scout the space in person — just reach out and we'll set up a visit.
 - **Alcohol:** allowed with the $50 alcohol fee added at booking.
 - **Pets:** case by case (see the FAQ).
 
+## Events — building security & closing up
+
+For events (and any after-hours booking), securing the building at the end is
+important:
+- During your event you may prop the building's **main doors** open so your
+  guests can come and go easily (use an object to hold a door open).
+- When the event ends, you must **close the building's main doors** and **return
+  the keys** (to the lockbox, per your entry instructions).
+- Please **send us photos** confirming the main doors are closed and the keys are
+  back — this helps keep the whole building secure.
+
 ## Add-ons available
 
 - 10 Foldable Chairs — $45

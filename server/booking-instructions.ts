@@ -28,11 +28,12 @@ export interface BookingInfo {
   isEvent: boolean; // looks like an event (DJ/party/etc. or large group)
 }
 
-// Appended to entry instructions for event bookings (no door codes — safe here).
+// Appended to entry instructions for events / after-hours bookings (no door codes
+// — safe here).
 export const EVENT_SECURITY_NOTE =
-  "\n\n— Building security (events) —\n" +
-  "You're welcome to prop the building's main doors open during your event for " +
-  "easy guest access. When your event ends, please close the building's main " +
+  "\n\n— Building security —\n" +
+  "You're welcome to prop the building's main doors open during your session for " +
+  "easy guest access. When your session ends, please close the building's main " +
   "doors and return the keys to the lockbox, then send us photos confirming both " +
   "— this helps keep the whole building secure.";
 
@@ -64,10 +65,18 @@ function parseAttendees(text: string): number | null {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function looksLikeEvent(guestNote: string | null, attendees: number | null): boolean {
+function looksLikeEvent(
+  guestNote: string | null,
+  attendees: number | null,
+  startMinutes: number | null
+): boolean {
   const note = guestNote || "";
   if (EVENT_KEYWORDS.some((re) => re.test(note))) return true;
   if (attendees != null && attendees >= 20) return true;
+  // After-hours (starts before 9 AM or at/after 3 PM) — treat as an event for the
+  // building-security note, since the building is otherwise locked up.
+  if (startMinutes != null && (startMinutes < 9 * 60 || startMinutes >= 15 * 60))
+    return true;
   return false;
 }
 
@@ -172,14 +181,15 @@ export function parseBooking(text: string): BookingInfo {
   const spaceText = valueAfter(text, "Space");
   const guestNote = parseGuestNote(text);
   const attendees = parseAttendees(text);
+  const startMinutes = parseStartMinutes(text);
   return {
     studio: detectStudio(text),
-    startMinutes: parseStartMinutes(text),
+    startMinutes,
     dateTimeText: parseDateTimeText(text),
     spaceText,
     guestNote,
     attendees,
-    isEvent: looksLikeEvent(guestNote, attendees),
+    isEvent: looksLikeEvent(guestNote, attendees, startMinutes),
   };
 }
 

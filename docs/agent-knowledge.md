@@ -274,8 +274,10 @@ scout the space in person — just reach out and we'll set up a visit.
 
 ## Events — building security & closing up
 
-For events (and any after-hours booking), securing the building at the end is
-important:
+This applies to the **Bogart Street studios (Studios 1, 2 & 3)** only — the
+Lincoln Apartment is a standalone unit with its own lock-up steps in its entry
+instructions. For events (and any after-hours booking) at the studios, securing
+the building at the end is important:
 - During your event you may prop the building's **main doors** open so your
   guests can come and go easily (use an object to hold a door open).
 - When the event ends, you must **close the building's main doors** and **return

@@ -467,8 +467,13 @@ async function handleBookingEmail(args: {
     return;
   }
 
-  // For events, append the building-security / closing-up note.
-  const finalText = info.isEvent ? tpl.text + EVENT_SECURITY_NOTE : tpl.text;
+  // For events/after-hours at the Bogart St studios (1/2/3), append the
+  // building-security / closing-up note. The Lincoln Apartment is a standalone
+  // unit (no shared building doors/lockbox), so it never gets this note.
+  const finalText =
+    info.isEvent && info.studio !== "lincoln-apartment"
+      ? tpl.text + EVENT_SECURITY_NOTE
+      : tpl.text;
 
   const draft = await storage.createAgentDraft({
     conversationId: conversation.id,

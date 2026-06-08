@@ -29,6 +29,7 @@ import {
   saveInstructionTemplates,
 } from "./booking-instructions";
 import { applyBookingBuffers, removeBookingBuffers } from "./booking-buffers";
+import { startAddonReminderScheduler } from "./addon-reminders";
 import {
   constructWebhookEvent,
   createDraftPaymentIntent,
@@ -234,6 +235,9 @@ export async function registerRoutes(
   // Peerspace messages from the linked Gmail). No-op unless AGENT_ENABLED and
   // GMAIL_USER/GMAIL_APP_PASSWORD are set.
   startGmailInboundPoller();
+
+  // Night-before equipment add-on prep reminders for Peerspace bookings.
+  startAddonReminderScheduler();
 
   // ----- Bookings -----
   app.get("/api/bookings", async (_req, res, next) => {

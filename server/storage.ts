@@ -6,6 +6,7 @@ import {
   agentMessages,
   agentDrafts,
   appSettings,
+  peerspaceBookings,
 } from "@shared/schema";
 import {
   computeCardSurcharge,
@@ -33,6 +34,7 @@ import type {
   AgentConversationDto,
   AgentMessageDto,
   AgentDraftDto,
+  PeerspaceBookingRow,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -155,6 +157,22 @@ sqlite.exec(`
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS peerspace_bookings (
+    id TEXT PRIMARY KEY,
+    booking_key TEXT NOT NULL UNIQUE,
+    guest_name TEXT,
+    studio TEXT,
+    date_time_text TEXT,
+    start_epoch INTEGER,
+    addons TEXT,
+    addons_truncated INTEGER NOT NULL DEFAULT 0,
+    view_link TEXT,
+    source_email_at INTEGER NOT NULL DEFAULT 0,
+    reminder_sent_at INTEGER,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
 `);
@@ -533,6 +551,20 @@ export interface IStorage {
   getSetting(key: string): string | null;
   setSetting(key: string, value: string): void;
   deleteSetting(key: string): void;
+  // Peerspace bookings (add-on prep reminders).
+  upsertPeerspaceBooking(args: {
+    bookingKey: string;
+    guestName?: string | null;
+    studio?: string | null;
+    dateTimeText?: string | null;
+    startEpoch?: number | null;
+    addons?: string | null;
+    addonsTruncated?: boolean;
+    viewLink?: string | null;
+    sourceEmailAt: number;
+  }): void;
+  listAddonReminderCandidates(): PeerspaceBookingRow[];
+  markAddonReminderSent(id: string, now: number): void;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1367,6 +1399,85 @@ export class DatabaseStorage implements IStorage {
 
   deleteSetting(key: string): void {
     db.delete(appSettings).where(eq(appSettings.key, key)).run();
+  }
+
+  upsertPeerspaceBooking(args: {
+    bookingKey: string;
+    guestName?: string | null;
+    studio?: string | null;
+    dateTimeText?: string | null;
+    startEpoch?: number | null;
+    addons?: string | null;
+    addonsTruncated?: boolean;
+    viewLink?: string | null;
+    sourceEmailAt: number;
+  }): void {
+    const now = Date.now();
+    const existing = db
+      .select()
+      .from(peerspaceBookings)
+      .where(eq(peerspaceBookings.bookingKey, args.bookingKey))
+      .get();
+    if (!existing) {
+      db.insert(peerspaceBookings)
+        .values({
+          id: `psb-${now}-${Math.random().toString(36).slice(2, 7)}`,
+          bookingKey: args.bookingKey,
+          guestName: args.guestName ?? null,
+          studio: args.studio ?? null,
+          dateTimeText: args.dateTimeText ?? null,
+          startEpoch: args.startEpoch ?? null,
+          addons: args.addons ?? null,
+          addonsTruncated: args.addonsTruncated ?? false,
+          viewLink: args.viewLink ?? null,
+          sourceEmailAt: args.sourceEmailAt,
+          reminderSentAt: null,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+      return;
+    }
+    // Latest email wins: only overwrite when this email is newer.
+    if (args.sourceEmailAt < existing.sourceEmailAt) return;
+    db.update(peerspaceBookings)
+      .set({
+        guestName: args.guestName ?? existing.guestName,
+        studio: args.studio ?? existing.studio,
+        dateTimeText: args.dateTimeText ?? existing.dateTimeText,
+        startEpoch: args.startEpoch ?? existing.startEpoch,
+        addons: args.addons ?? existing.addons,
+        addonsTruncated: args.addonsTruncated ?? existing.addonsTruncated,
+        viewLink: args.viewLink ?? existing.viewLink,
+        sourceEmailAt: args.sourceEmailAt,
+        status: "active",
+        updatedAt: now,
+      })
+      .where(eq(peerspaceBookings.id, existing.id))
+      .run();
+  }
+
+  listAddonReminderCandidates(): PeerspaceBookingRow[] {
+    return db
+      .select()
+      .from(peerspaceBookings)
+      .where(eq(peerspaceBookings.status, "active"))
+      .all()
+      .filter(
+        (b) =>
+          !b.reminderSentAt &&
+          b.startEpoch != null &&
+          b.addons != null &&
+          b.addons !== "[]"
+      );
+  }
+
+  markAddonReminderSent(id: string, now: number): void {
+    db.update(peerspaceBookings)
+      .set({ reminderSentAt: now, updatedAt: now })
+      .where(eq(peerspaceBookings.id, id))
+      .run();
   }
 
   async getAgentConversation(

@@ -16,6 +16,7 @@ import {
 } from "./booking-instructions";
 import { sendAgentNovelQuestionAlert } from "./integrations";
 import { handleGiggsterEmail, isGiggsterEmail } from "./booking-buffers";
+import { captureBookingAddons, isBookingUpdate } from "./addon-reminders";
 
 // ---------------------------------------------------------------------------
 // Gmail IMAP poller for the Peerspace email-reply agent.
@@ -329,8 +330,16 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     return;
   }
 
-  // Confirmed-booking emails get the deterministic entry-instructions flow, not
-  // the Q&A bot.
+  // "Your booking has been updated" → refresh the add-on prep record only (NOT
+  // a new booking, so no entry instructions).
+  if (isBookingUpdate(parsed.subject || null, parsed.text || null)) {
+    captureBookingAddons(parsed.subject || null, parsed.text || null, parsed.date ?? null, true);
+    console.log("[gmail-inbound] booking update; refreshed add-on record");
+    return;
+  }
+
+  // Confirmed-booking emails get the deterministic entry-instructions flow, plus
+  // we capture any equipment add-ons for the night-before prep reminder.
   if (isBookingEmail(parsed.text || null)) {
     await handleBookingEmail({
       rawText: parsed.text || "",
@@ -340,6 +349,7 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
       subject: parsed.subject || null,
       messageId: parsed.messageId || null,
     });
+    captureBookingAddons(parsed.subject || null, parsed.text || null, parsed.date ?? null, false);
     return;
   }
 

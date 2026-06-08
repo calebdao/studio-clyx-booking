@@ -46,6 +46,23 @@ are handled deterministically, NOT by the LLM:
 - For events / after-hours bookings, the building-security closing-up note is
   appended (see `EVENT_SECURITY_NOTE` / `looksLikeEvent`).
 
+## Add-on prep reminders
+
+`server/addon-reminders.ts` emails the operator (OWNER_ALERT_EMAILS) at
+`AGENT_REMINDER_HOUR_ET` (default 18:00 NY) the night before a Peerspace booking
+that has equipment add-ons.
+
+- Add-ons are captured from **confirmation** emails (alongside entry instructions)
+  and **"booking has been updated"** emails (which refresh the record but do NOT
+  re-send instructions). Records live in `peerspace_bookings`, keyed by the
+  Peerspace booking id (extracted from the tracking links; falls back to
+  guest+studio+date) and versioned by the email date so the **latest update wins**.
+- Peerspace truncates the email's add-on list to ~5 items; when 5 are captured the
+  reminder flags it ("there may be more") and links to the booking.
+- A 15-min scheduler (`startAddonReminderScheduler`) sends each due booking once
+  (`reminder_sent_at`). Caveat: no cancellation email is handled yet, so a
+  cancelled booking with add-ons could still get a reminder.
+
 ## Booking buffers (Giggster + direct bookings)
 
 `server/booking-buffers.ts` places a **30-min buffer event before and after** a

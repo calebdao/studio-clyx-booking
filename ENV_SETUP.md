@@ -70,6 +70,7 @@ GMAIL_APP_PASSWORD=                   # 16-char Gmail app password (set on host)
 # AGENT_MAX_PER_POLL=5                  # max emails per poll (bounds memory; backlog drains over polls)
 # GIGGSTER_SENDER_MATCH=giggster.com    # Giggster confirmation emails -> calendar buffers
 # AGENT_BUFFER_MINUTES=30               # buffer minutes each side of a booking (Giggster + confirmed direct bookings; 0 disables)
+# AGENT_REMINDER_HOUR_ET=18             # hour (NY, 24h) to email the night-before add-on prep reminder
 # PEERSPACE_IGNORE_SUBJECTS=...         # comma-separated subject substrings to skip (notifications); overrides default list
 # PEERSPACE_MESSAGE_SUBJECTS=...        # stricter allowlist: ONLY draft for subjects containing one of these
 # Optional: override the knowledge-base path (defaults to docs/agent-knowledge.md).

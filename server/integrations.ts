@@ -658,6 +658,46 @@ async function sendResendEmail(args: {
   }
 }
 
+// Night-before prep reminder: equipment add-ons to prepare for tomorrow's
+// Peerspace booking. Sent to OWNER_ALERT_EMAILS.
+export async function sendAddonReminderEmail(args: {
+  studioLabel: string;
+  guestName: string | null;
+  dateTimeText: string | null;
+  items: Array<{ name: string; qty: number }>;
+  truncated: boolean;
+  viewLink: string | null;
+}) {
+  const to = getOwnerAlertRecipients();
+  if (to.length === 0) {
+    console.log(
+      "[integrations] simulation (OWNER_ALERT_EMAILS missing): add-on prep reminder"
+    );
+    return { ok: true, mode: "simulation" as const, reason: "OWNER_ALERT_EMAILS missing" };
+  }
+  const who = args.guestName ? ` (${args.guestName})` : "";
+  const when = args.dateTimeText ? ` — ${args.dateTimeText}` : "";
+  const subject = `Prep reminder: ${args.studioLabel} tomorrow — ${args.items.length} add-on(s)`;
+  const itemsText = args.items.map((i) => `• ${i.name} ×${i.qty}`).join("\n");
+  const itemsHtml = args.items
+    .map((i) => `<li>${escapeHtml(i.name)} ×${i.qty}</li>`)
+    .join("");
+  const truncNote = args.truncated
+    ? "\n\n⚠️ Peerspace's email only lists the first ~5 add-ons — there may be more. Check the full list:"
+    : "";
+  const truncHtml = args.truncated
+    ? `<p style="color:#9a6a00"><b>⚠️ Peerspace's email only lists the first ~5 add-ons — there may be more.</b> Check the full list${args.viewLink ? `: <a href="${args.viewLink}">View booking</a>` : ""}.</p>`
+    : args.viewLink
+      ? `<p><a href="${args.viewLink}">View booking on Peerspace</a></p>`
+      : "";
+  const text = `Equipment to prepare for tomorrow's ${args.studioLabel} booking${who}${when}:\n\n${itemsText}${truncNote}${args.viewLink ? `\n${args.viewLink}` : ""}`;
+  const html =
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a">` +
+    `<p>Equipment to prepare for tomorrow's <b>${escapeHtml(args.studioLabel)}</b> booking${escapeHtml(who)}${escapeHtml(when)}:</p>` +
+    `<ul>${itemsHtml}</ul>${truncHtml}</div>`;
+  return sendResendEmail({ to, subject, html, text, label: "add-on prep reminder", bookingId: "addon-reminder" });
+}
+
 export async function sendConfirmationEmail(booking: BookingDto) {
   const { subject, text, html } = buildConfirmationEmail(booking);
   return sendResendEmail({

@@ -308,6 +308,30 @@ export const agentDraftActionSchema = z.object({
 });
 export type AgentDraftAction = z.infer<typeof agentDraftActionSchema>;
 
+// Upcoming Peerspace bookings captured from confirmation/update emails, used for
+// the night-before add-on prep reminder. Keyed by the Peerspace booking id (or a
+// guest+studio+date fallback); versioned by the source email's date so the latest
+// update wins.
+export const peerspaceBookings = sqliteTable("peerspace_bookings", {
+  id: text("id").primaryKey(),
+  bookingKey: text("booking_key").notNull().unique(),
+  guestName: text("guest_name"),
+  studio: text("studio"),
+  dateTimeText: text("date_time_text"),
+  startEpoch: integer("start_epoch"), // booking start (epoch ms) for scheduling
+  addons: text("addons"), // JSON array of { name, qty }
+  addonsTruncated: integer("addons_truncated", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  viewLink: text("view_link"),
+  sourceEmailAt: integer("source_email_at").notNull().default(0), // version
+  reminderSentAt: integer("reminder_sent_at"),
+  status: text("status").notNull().default("active"), // active | cancelled
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+export type PeerspaceBookingRow = typeof peerspaceBookings.$inferSelect;
+
 // Generic key/value settings (e.g. the editable agent knowledge base). Lets the
 // operator change runtime config without a redeploy; persists in the DB.
 export const appSettings = sqliteTable("app_settings", {

@@ -102,14 +102,26 @@ function httpError(status: number, message: string) {
 //   DOOR_OPEN_DTMF           digit(s) that open the door (default "9")
 //   DOOR_OPEN_PAUSE_SECONDS  pause before the tone so the line is up (default 1)
 //   DOOR_FORWARD_NUMBER      your cell (E.164, e.g. +16463842698) for the fallback
+//   DOOR_INTERCOM_CALLER     if set, only auto-open for calls FROM this number
+//                            (last-10-digit match) — lets you forward your cell's
+//                            missed calls here without other callers opening the door
 // Note: hitting this URL directly does nothing — the door only opens when Twilio
 // plays the tone on the live call the intercom placed.
-function doorEntryTwiml(): string {
+function last10(n: string): string {
+  return (n || "").replace(/\D/g, "").slice(-10);
+}
+function doorEntryTwiml(from: string): string {
   const enabled =
     (process.env.DOOR_AUTO_OPEN_ENABLED ?? "").toLowerCase() === "true";
-  if (!enabled) {
+  const allowed = (process.env.DOOR_INTERCOM_CALLER ?? "").trim();
+  const callerOk = !allowed || (last10(from) !== "" && last10(from) === last10(allowed));
+
+  if (!enabled || !callerOk) {
+    // Not a call we should auto-open. When auto-open is simply off, forward to
+    // the cell so you can answer manually; otherwise (a non-intercom caller that
+    // got here via forwarding) just hang up.
     const fwd = (process.env.DOOR_FORWARD_NUMBER ?? "").trim();
-    const action = fwd ? `<Dial>${fwd}</Dial>` : `<Hangup/>`;
+    const action = !enabled && fwd ? `<Dial>${fwd}</Dial>` : `<Hangup/>`;
     return `<?xml version="1.0" encoding="UTF-8"?><Response>${action}</Response>`;
   }
   const dtmf = ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9wW#*]/g, "")) || "9";
@@ -1024,9 +1036,9 @@ export async function registerRoutes(
     const open =
       (process.env.DOOR_AUTO_OPEN_ENABLED ?? "").toLowerCase() === "true";
     console.log(
-      `[door] buzzer call from ${from}; ${open ? "auto-opening" : "forwarding/hangup"}`
+      `[door] buzzer call from ${from}; ${open ? "auto-opening (if caller allowed)" : "forwarding/hangup"}`
     );
-    res.type("text/xml").send(doorEntryTwiml());
+    res.type("text/xml").send(doorEntryTwiml(String(from)));
   });
 
   // ----- Integration status (admin callout) -----

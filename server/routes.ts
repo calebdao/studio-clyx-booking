@@ -110,6 +110,16 @@ function httpError(status: number, message: string) {
 function last10(n: string): string {
   return (n || "").replace(/\D/g, "").slice(-10);
 }
+// The TwiML body that actually opens the door (pause so the line is up, then the
+// DTMF open tone, then hang up).
+function openToneTwiml(): string {
+  const dtmf = ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9wW#*]/g, "")) || "9";
+  const pause = Math.max(
+    0,
+    Math.min(10, Number(process.env.DOOR_OPEN_PAUSE_SECONDS ?? 1) || 1)
+  );
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="${pause}"/><Play digits="${dtmf}"/><Hangup/></Response>`;
+}
 function doorEntryTwiml(from: string): string {
   const enabled =
     (process.env.DOOR_AUTO_OPEN_ENABLED ?? "").toLowerCase() === "true";
@@ -124,12 +134,18 @@ function doorEntryTwiml(from: string): string {
     const action = !enabled && fwd ? `<Dial>${fwd}</Dial>` : `<Hangup/>`;
     return `<?xml version="1.0" encoding="UTF-8"?><Response>${action}</Response>`;
   }
-  const dtmf = ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9wW#*]/g, "")) || "9";
-  const pause = Math.max(
-    0,
-    Math.min(10, Number(process.env.DOOR_OPEN_PAUSE_SECONDS ?? 1) || 1)
-  );
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="${pause}"/><Play digits="${dtmf}"/><Hangup/></Response>`;
+
+  // Ring-first mode: ring your cell first; if you answer you press 9 yourself, if
+  // you don't pick up Twilio auto-opens (handled by /api/voice/door/after).
+  const ringFirst = (process.env.DOOR_RING_FIRST ?? "").toLowerCase() === "true";
+  const cell = (process.env.DOOR_FORWARD_NUMBER ?? "").trim();
+  if (ringFirst && cell) {
+    const timeout = Math.max(5, Math.min(60, Number(process.env.DOOR_RING_TIMEOUT ?? 18) || 18));
+    return `<?xml version="1.0" encoding="UTF-8"?><Response><Dial timeout="${timeout}" answerOnBridge="true" action="/api/voice/door/after" method="POST"><Number>${cell}</Number></Dial></Response>`;
+  }
+
+  // Immediate auto-open.
+  return openToneTwiml();
 }
 
 // Local activity rate table — kept in sync with server/integrations.ts and
@@ -1039,6 +1055,25 @@ export async function registerRoutes(
       `[door] buzzer call from ${from}; ${open ? "auto-opening (if caller allowed)" : "forwarding/hangup"}`
     );
     res.type("text/xml").send(doorEntryTwiml(String(from)));
+  });
+
+  // After the ring-first <Dial>: if you answered ("completed") you handled it;
+  // otherwise (no-answer/busy/failed) auto-open because you missed the call.
+  app.all("/api/voice/door/after", (req, res) => {
+    const status = (
+      (req.body && (req.body as Record<string, unknown>).DialCallStatus) ||
+      (req.query && (req.query as Record<string, unknown>).DialCallStatus) ||
+      ""
+    )
+      .toString()
+      .toLowerCase();
+    if (status === "completed") {
+      console.log("[door] ring-first: you answered; not auto-opening");
+      res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+    } else {
+      console.log(`[door] ring-first: missed (${status || "no status"}); auto-opening`);
+      res.type("text/xml").send(openToneTwiml());
+    }
   });
 
   // ----- Integration status (admin callout) -----

@@ -95,6 +95,31 @@ function httpError(status: number, message: string) {
   return e;
 }
 
+// Twilio Voice webhook for the 56 Bogart St buzzer. The intercom is reprogrammed
+// to dial a Twilio number; Twilio fetches this and we return TwiML that plays the
+// door-open DTMF tone. Env:
+//   DOOR_AUTO_OPEN_ENABLED   "true" => auto-open on any buzz; else forward to cell
+//   DOOR_OPEN_DTMF           digit(s) that open the door (default "9")
+//   DOOR_OPEN_PAUSE_SECONDS  pause before the tone so the line is up (default 1)
+//   DOOR_FORWARD_NUMBER      your cell (E.164, e.g. +16463842698) for the fallback
+// Note: hitting this URL directly does nothing — the door only opens when Twilio
+// plays the tone on the live call the intercom placed.
+function doorEntryTwiml(): string {
+  const enabled =
+    (process.env.DOOR_AUTO_OPEN_ENABLED ?? "").toLowerCase() === "true";
+  if (!enabled) {
+    const fwd = (process.env.DOOR_FORWARD_NUMBER ?? "").trim();
+    const action = fwd ? `<Dial>${fwd}</Dial>` : `<Hangup/>`;
+    return `<?xml version="1.0" encoding="UTF-8"?><Response>${action}</Response>`;
+  }
+  const dtmf = ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9wW#*]/g, "")) || "9";
+  const pause = Math.max(
+    0,
+    Math.min(10, Number(process.env.DOOR_OPEN_PAUSE_SECONDS ?? 1) || 1)
+  );
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="${pause}"/><Play digits="${dtmf}"/><Hangup/></Response>`;
+}
+
 // Local activity rate table — kept in sync with server/integrations.ts and
 // client/src/lib/booking-data.ts. Used to compute the base total for the
 // no-hold card flow before the booking row exists.
@@ -988,6 +1013,20 @@ export async function registerRoutes(
       }
       next(e);
     }
+  });
+
+  // ----- Building buzzer (Twilio Voice webhook) -----
+  app.all("/api/voice/door", (req, res) => {
+    const from =
+      ((req.body && (req.body as Record<string, unknown>).From) ||
+        (req.query && (req.query as Record<string, unknown>).From) ||
+        "unknown") as string;
+    const open =
+      (process.env.DOOR_AUTO_OPEN_ENABLED ?? "").toLowerCase() === "true";
+    console.log(
+      `[door] buzzer call from ${from}; ${open ? "auto-opening" : "forwarding/hangup"}`
+    );
+    res.type("text/xml").send(doorEntryTwiml());
   });
 
   // ----- Integration status (admin callout) -----

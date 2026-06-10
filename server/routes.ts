@@ -110,17 +110,82 @@ function httpError(status: number, message: string) {
 function last10(n: string): string {
   return (n || "").replace(/\D/g, "").slice(-10);
 }
-// The TwiML body that actually opens the door (pause so the line is up, then the
-// DTMF open tone, then hang up).
-function openToneTwiml(): string {
-  const dtmf = ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9wW#*]/g, "")) || "9";
+// DTMF tone pairs (low Hz, high Hz) per key.
+const DTMF_FREQS: Record<string, [number, number]> = {
+  "1": [697, 1209], "2": [697, 1336], "3": [697, 1477],
+  "4": [770, 1209], "5": [770, 1336], "6": [770, 1477],
+  "7": [852, 1209], "8": [852, 1336], "9": [852, 1477],
+  "0": [941, 1336], "*": [941, 1209], "#": [941, 1477],
+};
+
+// Generate a mono 8 kHz 16-bit PCM WAV of a single DTMF digit held for `seconds`.
+// `<Play digits>` only emits a ~0.5s beep; an intercom latch usually needs the
+// tone SUSTAINED (like holding the key), so we serve a long tone as audio.
+function buildDtmfWav(digit: string, seconds: number): Buffer {
+  const sampleRate = 8000;
+  const n = Math.floor(sampleRate * seconds);
+  const [f1, f2] = DTMF_FREQS[digit] || DTMF_FREQS["9"];
+  const data = Buffer.alloc(n * 2);
+  const amp = 0.3 * 32767;
+  for (let i = 0; i < n; i++) {
+    const t = i / sampleRate;
+    const s = (amp * (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t))) / 2;
+    data.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(s))), i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  header.writeUInt16LE(2, 32); // block align
+  header.writeUInt16LE(16, 34); // bits per sample
+  header.write("data", 36);
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
+function doorOpenDigit(): string {
+  return ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9*#]/g, "")[0]) || "9";
+}
+// Absolute base URL Twilio should fetch the tone audio from. Prefer an explicit
+// env, else derive from the incoming request's host (works on Render).
+function doorBaseUrl(req: { get(name: string): string | undefined }): string {
+  const explicit = (process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  if (explicit) return explicit;
+  const proto = (req.get("x-forwarded-proto") || "https").split(",")[0].trim();
+  const host = req.get("x-forwarded-host") || req.get("host") || "studio-clyx-booking.onrender.com";
+  return `${proto}://${host}`;
+}
+function doorToneSeconds(): number {
+  return Math.max(0.5, Math.min(10, Number(process.env.DOOR_TONE_SECONDS ?? 3) || 3));
+}
+
+// The TwiML body that actually opens the door: pause so the line is up, then the
+// open tone, then hang up. By default plays a SUSTAINED tone (the held-key fix);
+// set DOOR_TONE_HOLD=false to fall back to the short `<Play digits>` beep.
+function openToneTwiml(baseUrl?: string): string {
   const pause = Math.max(
     0,
     Math.min(10, Number(process.env.DOOR_OPEN_PAUSE_SECONDS ?? 1) || 1)
   );
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="${pause}"/><Play digits="${dtmf}"/><Hangup/></Response>`;
+  const hold = (process.env.DOOR_TONE_HOLD ?? "true").toLowerCase() !== "false";
+  const repeat = Math.max(1, Math.min(5, Number(process.env.DOOR_TONE_REPEAT ?? 1) || 1));
+  let body: string;
+  if (hold && baseUrl) {
+    const url = `${baseUrl}/api/voice/tone.wav`;
+    body = `<Play>${url}</Play>`.repeat(repeat);
+  } else {
+    const dtmf = ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9wW#*]/g, "")) || "9";
+    body = `<Play digits="${dtmf}"/>`;
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="${pause}"/>${body}<Hangup/></Response>`;
 }
-function doorEntryTwiml(from: string): string {
+function doorEntryTwiml(from: string, baseUrl?: string): string {
   const enabled =
     (process.env.DOOR_AUTO_OPEN_ENABLED ?? "").toLowerCase() === "true";
   const allowed = (process.env.DOOR_INTERCOM_CALLER ?? "").trim();
@@ -145,7 +210,7 @@ function doorEntryTwiml(from: string): string {
   }
 
   // Immediate auto-open.
-  return openToneTwiml();
+  return openToneTwiml(baseUrl);
 }
 
 // Local activity rate table — kept in sync with server/integrations.ts and
@@ -1054,7 +1119,14 @@ export async function registerRoutes(
     console.log(
       `[door] buzzer call from ${from}; ${open ? "auto-opening (if caller allowed)" : "forwarding/hangup"}`
     );
-    res.type("text/xml").send(doorEntryTwiml(String(from)));
+    res.type("text/xml").send(doorEntryTwiml(String(from), doorBaseUrl(req)));
+  });
+
+  // Sustained DTMF open-tone as audio (the held-key fix). Served so Twilio can
+  // <Play> a long tone instead of the short <Play digits> beep.
+  app.get("/api/voice/tone.wav", (_req, res) => {
+    const wav = buildDtmfWav(doorOpenDigit(), doorToneSeconds());
+    res.type("audio/wav").send(wav);
   });
 
   // After the ring-first <Dial>: if you answered ("completed") you handled it;
@@ -1072,7 +1144,7 @@ export async function registerRoutes(
       res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
     } else {
       console.log(`[door] ring-first: missed (${status || "no status"}); auto-opening`);
-      res.type("text/xml").send(openToneTwiml());
+      res.type("text/xml").send(openToneTwiml(doorBaseUrl(req)));
     }
   });
 

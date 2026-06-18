@@ -71,6 +71,26 @@ function deferringToHuman(text: string): boolean {
   return ESCALATION_PHRASES.some((p) => s.includes(p));
 }
 
+// Name the bot signs Q&A replies as. Defaults to Gladys; override per-deploy.
+export function signoffName(): string {
+  return (process.env.AGENT_SIGNOFF_NAME || "Gladys").trim() || "Gladys";
+}
+
+// Force every outgoing Q&A reply to close with the configured signer. The system
+// prompt already asks for it; this is a deterministic backstop so a reply never
+// goes out signed as "Studio Clyx"/"the team" or unsigned if the model deviates.
+function enforceSignoff(reply: string, name: string): string {
+  const text = reply.replace(/\s+$/, "");
+  // Already signed by them near the end → leave as-is.
+  if (text.slice(-60).toLowerCase().includes(name.toLowerCase())) return text;
+  // A trailing studio-name sign-off → swap it for the signer (won't touch
+  // "Studio Clyx" mentions elsewhere in the body).
+  const trailingStudio = /(the\s+)?studio\s+clyx(\s+team)?\s*$/i;
+  if (trailingStudio.test(text)) return text.replace(trailingStudio, name);
+  // No detectable sign-off → append one.
+  return `${text}\n\nWarmly,\n${name}`;
+}
+
 export function agentStatus() {
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
   return {
@@ -258,7 +278,8 @@ function buildSystemPrompt(
     "",
     "- If the knowledge base fully covers the question: set confident=true, put a",
     "  complete, ready-to-send plain-text email body in \"reply\" (warm, concise,",
-    "  professional; sign off as \"Studio Clyx\"; no placeholders like [name]), and",
+    `  professional; ALWAYS sign off as "${signoffName()}" (e.g. "Warmly,\\n${signoffName()}");`,
+    "  do NOT sign as \"Studio Clyx\" or \"the team\"; no placeholders like [name]), and",
     "  set \"missing\" to \"\".",
     "- Otherwise: set confident=false, set \"reply\" to \"\", and in \"missing\"",
     "  briefly describe what information is needed to answer. Do NOT write a",
@@ -586,22 +607,23 @@ export async function generateDraftForConversation(
   }
 
   // Confident → create the draft. Auto-send only if enabled and the reply isn't
-  // itself deferring to a human.
+  // itself deferring to a human. Enforce the Gladys sign-off on the way out.
+  const replyText = enforceSignoff(structured.reply, signoffName());
   const draft = await storage.createAgentDraft({
     conversationId,
     inboundMessageId,
     proposedSubject: subject,
-    proposedBodyText: structured.reply,
+    proposedBodyText: replyText,
     status: "pending",
     model,
   });
 
-  if (agentAutoSend() && !deferringToHuman(structured.reply)) {
+  if (agentAutoSend() && !deferringToHuman(replyText)) {
     const sent = await deliverReply({
       conversation: convo,
       draftId: draft.id,
       subject,
-      text: structured.reply,
+      text: replyText,
       auto: true,
     });
     console.log(

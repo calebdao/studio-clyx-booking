@@ -20,13 +20,17 @@ import {
   pushHoldToCalendar,
   removeCalendarEvent,
   sendConfirmationEmail,
+  sendEntryInstructionsEmail,
   sendOwnerBookingAlert,
   startHoldExpirySweeper,
 } from "./integrations";
 import { gmailStatus } from "./gmail";
 import {
+  EVENT_SECURITY_NOTE,
   getInstructionTemplates,
   saveInstructionTemplates,
+  selectInstruction,
+  type StudioKey,
 } from "./booking-instructions";
 import { applyBookingBuffers, removeBookingBuffers } from "./booking-buffers";
 import { startAddonReminderScheduler } from "./addon-reminders";
@@ -41,6 +45,7 @@ import {
 } from "./stripe";
 import { sendSlotTakenRefundEmail } from "./integrations";
 import {
+  agentAutoSendInstructions,
   agentStatus,
   appendLearnedAnswer,
   deliverReply,
@@ -524,6 +529,62 @@ export async function registerRoutes(
 
   // Shared confirm chain so both the admin button and Stripe webhook run
   // identical post-confirm logic (status flip → calendar patch → guest email).
+  // Booking start time as minutes-since-midnight in NY local time (for choosing
+  // the day vs after-hours instruction template).
+  function nyStartMinutes(iso: string): number | null {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hourCycle: "h23",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(d);
+    const h = Number(parts.find((p) => p.type === "hour")?.value);
+    const m = Number(parts.find((p) => p.type === "minute")?.value);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+  }
+
+  // Auto-send entry instructions for a confirmed DIRECT (studioclyx.com) booking,
+  // mirroring the Peerspace flow: same DB templates, same event/after-hours
+  // building-security note, same AGENT_AUTO_SEND_INSTRUCTIONS toggle. Best-effort:
+  // never throws into the confirm chain.
+  async function sendDirectBookingInstructions(booking: BookingDto): Promise<void> {
+    if (!agentAutoSendInstructions()) return;
+    const studio = booking.spaceId as StudioKey;
+    const startMinutes = nyStartMinutes(booking.start);
+    const tpl = selectInstruction(studio, startMinutes);
+    if (!tpl.text) {
+      console.warn(
+        `[direct-booking] no entry instructions for ${studio} (${booking.id}): ${tpl.reason}`
+      );
+      return;
+    }
+    const isEvent =
+      booking.activityId === "event" ||
+      booking.guestCount >= 20 ||
+      (startMinutes != null && (startMinutes < 9 * 60 || startMinutes >= 15 * 60));
+    const finalText =
+      isEvent && studio !== "lincoln-apartment"
+        ? tpl.text + EVENT_SECURITY_NOTE
+        : tpl.text;
+    try {
+      const r = await sendEntryInstructionsEmail({
+        to: booking.guest.email,
+        bookingId: booking.id,
+        text: finalText,
+      });
+      console.log(
+        r.ok
+          ? `[direct-booking] sent ${studio} entry instructions for ${booking.id}${r.mode === "simulation" ? " (simulation)" : ""}`
+          : `[direct-booking] entry-instructions send failed for ${booking.id}: ${"error" in r ? r.error : "unknown"}`
+      );
+    } catch (e) {
+      console.error(`[direct-booking] entry-instructions error for ${booking.id}:`, e);
+    }
+  }
+
   async function runConfirmChain(bookingId: string) {
     const booking = await storage.confirmBooking(bookingId);
     if (!booking) throw httpError(404, "Booking not found.");
@@ -572,6 +633,8 @@ export async function registerRoutes(
     } catch (e) {
       console.error("booking buffer placement error", e);
     }
+    // Auto-send entry instructions alongside the confirmation email.
+    await sendDirectBookingInstructions(booking);
     return { booking, calendar, email };
   }
 
@@ -866,6 +929,8 @@ export async function registerRoutes(
                 e
               );
             }
+            // Auto-send entry instructions alongside the confirmation email.
+            await sendDirectBookingInstructions(booking);
             // Owner alert: tell the operator a card booking just landed.
             try {
               await sendOwnerBookingAlert(booking);

@@ -710,6 +710,27 @@ export async function sendConfirmationEmail(booking: BookingDto) {
   });
 }
 
+// Entry instructions for a confirmed DIRECT (studioclyx.com) booking. The text
+// is the verbatim DB-stored template (door/lockbox codes live only in the DB);
+// we just wrap it in a light HTML shell so line breaks survive in email clients.
+export async function sendEntryInstructionsEmail(args: {
+  to: string;
+  bookingId: string;
+  text: string;
+}) {
+  const html =
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;white-space:pre-wrap;">` +
+    `${escapeHtml(args.text)}</div>`;
+  return sendResendEmail({
+    to: args.to,
+    subject: "Studio Clyx — your booking & entry instructions",
+    text: args.text,
+    html,
+    label: "entry instructions",
+    bookingId: args.bookingId,
+  });
+}
+
 export function buildOwnerBookingAlertEmail(booking: BookingDto) {
   const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
   const activity = ACTIVITY_LABELS[booking.activityId];

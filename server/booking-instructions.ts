@@ -92,6 +92,28 @@ export function isBookingEmail(text: string | null): boolean {
   return /view booking/i.test(text) || /payment details/i.test(text);
 }
 
+// Subject-level signal that an email is a booking CONFIRMATION — the trigger for
+// entry instructions. These subjects ("Your booking is confirmed with …",
+// "… booked your space") contain words like "confirmed" that the generic subject
+// ignore-list would otherwise skip, dropping the email before the booking flow.
+// The poller uses this to BYPASS the ignore filter for them (like Giggster mail),
+// letting the body-level booking detection take over. Reminders ("coming up"/
+// "starts soon"), cancellations, declines and expirations don't match, so they're
+// still skipped.
+export function isBookingConfirmationSubject(
+  subject: string | null | undefined
+): boolean {
+  const s = (subject || "").toLowerCase();
+  if (!s) return false;
+  if (/coming up|starts soon|cancel|declin|expired|reminder/.test(s)) return false;
+  return (
+    /your booking is confirmed/.test(s) ||
+    /booking is confirmed with/.test(s) ||
+    /\bbooking confirmed\b/.test(s) ||
+    /booked your space/.test(s)
+  );
+}
+
 // Peerspace booking reminders ("… is coming up" / "… starts soon") — not a new
 // booking and not a guest message, so the agent should ignore them entirely.
 export function isBookingReminder(text: string | null): boolean {

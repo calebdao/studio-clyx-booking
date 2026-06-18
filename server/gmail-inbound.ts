@@ -9,6 +9,7 @@ import {
 } from "./agent";
 import {
   EVENT_SECURITY_NOTE,
+  isBookingConfirmationSubject,
   isBookingEmail,
   isBookingReminder,
   parseBooking,
@@ -562,9 +563,14 @@ async function pollOnce(): Promise<number> {
           const subject = (head && head.envelope?.subject) || "";
           const fromAddr =
             (head && head.envelope?.from?.[0]?.address) || "";
-          // Giggster confirmations bypass the subject filter (they trigger the
-          // calendar-buffer flow, not Q&A).
-          if (!isGiggsterEmail(fromAddr) && !isActionableSubject(subject)) {
+          // Giggster confirmations and Peerspace booking *confirmations* bypass
+          // the subject filter: Giggster triggers calendar buffers, and a
+          // confirmation ("Your booking is confirmed …") triggers entry
+          // instructions — both have subjects the generic ignore-list would
+          // otherwise drop. Body-level routing inside ingestRawEmail sorts them.
+          const bypassFilter =
+            isGiggsterEmail(fromAddr) || isBookingConfirmationSubject(subject);
+          if (!bypassFilter && !isActionableSubject(subject)) {
             console.log(
               `[gmail-inbound] skipping non-message email (subject: "${subject.slice(0, 80)}")`
             );

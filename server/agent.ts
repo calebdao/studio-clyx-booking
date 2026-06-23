@@ -256,12 +256,21 @@ function formatInquiryContext(raw: string | null | undefined): string | null {
   }
 }
 
+interface SystemPrompt {
+  // Static instructions + knowledge base — identical across calls, so it's the
+  // cacheable prefix (sent with cache_control). The KB (~4.5k tokens) re-billed
+  // on every call is the dominant cost; caching cuts cached reads to ~10%.
+  staticText: string;
+  // Per-conversation context (inquiry/booking) — varies per call, not cached.
+  dynamicText: string | null;
+}
+
 function buildSystemPrompt(
   knowledge: string,
   bookingContext: string | null,
   inquiryContext: string | null
-): string {
-  return [
+): SystemPrompt {
+  const staticText = [
     "You are the email assistant for Studio Clyx, replying to a guest who",
     "contacted us through Peerspace.",
     "",
@@ -288,23 +297,26 @@ function buildSystemPrompt(
     "===== KNOWLEDGE BASE =====",
     knowledge,
     "===== END KNOWLEDGE BASE =====",
-    ...(inquiryContext
-      ? [
-          "",
-          "===== PEERSPACE INQUIRY CONTEXT (what the guest's request is about — reference naturally) =====",
-          inquiryContext,
-          "===== END INQUIRY CONTEXT =====",
-        ]
-      : []),
-    ...(bookingContext
-      ? [
-          "",
-          "===== MATCHED BOOKING (internal context — reference naturally, do not paste verbatim) =====",
-          bookingContext,
-          "===== END MATCHED BOOKING =====",
-        ]
-      : []),
   ].join("\n");
+
+  const dynamic: string[] = [];
+  if (inquiryContext) {
+    dynamic.push(
+      "===== PEERSPACE INQUIRY CONTEXT (what the guest's request is about — reference naturally) =====",
+      inquiryContext,
+      "===== END INQUIRY CONTEXT ====="
+    );
+  }
+  if (bookingContext) {
+    if (dynamic.length) dynamic.push("");
+    dynamic.push(
+      "===== MATCHED BOOKING (internal context — reference naturally, do not paste verbatim) =====",
+      bookingContext,
+      "===== END MATCHED BOOKING ====="
+    );
+  }
+
+  return { staticText, dynamicText: dynamic.length ? dynamic.join("\n") : null };
 }
 
 interface ChatMessage {
@@ -350,7 +362,7 @@ interface GenerateResult {
 }
 
 async function callClaude(
-  system: string,
+  system: SystemPrompt,
   messages: ChatMessage[]
 ): Promise<GenerateResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -368,6 +380,21 @@ async function callClaude(
       }),
     };
   }
+  // Send the system prompt as content blocks so the static instructions + KB
+  // prefix can be cached (cache_control: ephemeral). Cached reads bill at ~10%
+  // of input, and the KB is identical across calls, so repeated/bursty calls
+  // (backlogs, chat) get a big discount. The per-conversation block is separate
+  // and uncached. Cache has a ~5-min TTL; a miss just bills normally.
+  const systemBlocks: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: system.staticText,
+      cache_control: { type: "ephemeral" },
+    },
+  ];
+  if (system.dynamicText) {
+    systemBlocks.push({ type: "text", text: system.dynamicText });
+  }
   try {
     const res = await fetch(ANTHROPIC_URL, {
       method: "POST",
@@ -379,7 +406,7 @@ async function callClaude(
       body: JSON.stringify({
         model: agentModel(),
         max_tokens: MAX_TOKENS,
-        system,
+        system: systemBlocks,
         messages,
       }),
     });
@@ -389,7 +416,20 @@ async function callClaude(
     }
     const json = (await res.json()) as {
       content?: Array<{ type: string; text?: string }>;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+      };
     };
+    const u = json.usage;
+    if (u) {
+      console.log(
+        `[agent] tokens in=${u.input_tokens ?? 0} out=${u.output_tokens ?? 0} ` +
+          `cacheWrite=${u.cache_creation_input_tokens ?? 0} cacheRead=${u.cache_read_input_tokens ?? 0}`
+      );
+    }
     const text = (json.content ?? [])
       .filter((b) => b.type === "text" && b.text)
       .map((b) => b.text as string)

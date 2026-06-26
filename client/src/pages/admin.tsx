@@ -404,6 +404,8 @@ function AdminConsole() {
               activityId: target.activityId,
               addons: target.addons,
               paymentMethod: target.paymentMethod,
+              promoCode: target.promoCode ?? null,
+              startIso: target.start,
             });
             return (
               <div className="mt-2 rounded-md border border-card-border bg-background/40 divide-y divide-card-border text-sm">
@@ -640,6 +642,8 @@ function BookingRow({
     activityId: booking.activityId,
     addons: booking.addons,
     paymentMethod: booking.paymentMethod,
+    promoCode: booking.promoCode ?? null,
+    startIso: booking.start,
   });
 
   const isHeld = booking.status === "held";

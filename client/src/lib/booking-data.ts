@@ -74,6 +74,7 @@ export interface Booking {
   googleEventId?: string;
   googleCalendarId?: string;
   paymentMethod?: PaymentMethod;
+  promoCode?: string | null;
   cardFeeAmount?: number;
   paidAt?: number;
   stripePaymentIntentId?: string;

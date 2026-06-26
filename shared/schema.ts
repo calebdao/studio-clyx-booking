@@ -158,6 +158,14 @@ function nyDateStr(iso: string): string | null {
   }).format(d);
 }
 
+// Whether the promo is still worth advertising — true through the end of the
+// session window (after that no bookable session can fall inside it). Drives the
+// booking-page banner so it disappears on its own once the promo is over.
+export function promoIsActive(now: Date = new Date()): boolean {
+  const today = nyDateStr(now.toISOString());
+  return today !== null && today <= PROMO_SESSION_END;
+}
+
 export interface PromoEvaluation {
   applied: boolean;
   code: string; // normalized matched code, else ""

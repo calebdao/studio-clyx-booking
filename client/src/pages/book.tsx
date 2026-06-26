@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { evaluatePromo } from "@shared/schema";
+import { evaluatePromo, promoIsActive, PROMO_CODE } from "@shared/schema";
 import {
   ACTIVITIES,
   ActivityId,
@@ -234,6 +234,38 @@ export default function BookPage() {
           Confirmation by Zelle.
         </p>
       </div>
+
+      {/* Independence Day Week promo banner — auto-hides after the window ends */}
+      {promoIsActive() && (
+        <div
+          className="mb-8 lg:mb-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3"
+          data-testid="banner-promo"
+        >
+          <div className="text-sm leading-relaxed">
+            <span className="mr-1.5">🎆</span>
+            <span className="font-semibold">Independence Day Week — 15% off</span>
+            <span className="text-muted-foreground">
+              {" "}the room rate on sessions Jun 29–Jul 5, 2026. Use code{" "}
+            </span>
+            <span className="font-mono font-semibold tracking-wide">{PROMO_CODE}</span>
+            <span className="text-muted-foreground">.</span>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0 self-start sm:self-auto"
+            onClick={() => {
+              setPromoOpen(true);
+              setPromoInput(PROMO_CODE);
+              setAppliedPromo(PROMO_CODE);
+            }}
+            data-testid="button-apply-promo-banner"
+          >
+            Apply code
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 lg:gap-8 items-start">
         {/* LEFT: form + scheduler */}

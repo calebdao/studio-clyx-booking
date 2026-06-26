@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { evaluatePromo } from "@shared/schema";
 import {
   ACTIVITIES,
   ActivityId,
@@ -78,6 +79,9 @@ export default function BookPage() {
   // selected add-ons keyed by catalog id → quantity
   const [addonQty, setAddonQty] = useState<Record<string, number>>({});
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("zelle");
+  const [promoOpen, setPromoOpen] = useState(false);
+  const [promoInput, setPromoInput] = useState("");
+  const [appliedPromo, setAppliedPromo] = useState<string | null>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [heldBooking, setHeldBooking] = useState<Booking | null>(null);
@@ -117,6 +121,8 @@ export default function BookPage() {
       activityId,
       addons: selectedAddOns,
       paymentMethod,
+      promoCode: appliedPromo,
+      startIso: selection?.start.toISOString() ?? null,
     });
   }, [
     isComplete,
@@ -127,7 +133,18 @@ export default function BookPage() {
     activityId,
     selectedAddOns,
     paymentMethod,
+    appliedPromo,
+    selection,
   ]);
+
+  // Evaluate the applied promo against the selected session for a status message.
+  const promoEval = useMemo(
+    () =>
+      appliedPromo && selection
+        ? evaluatePromo(appliedPromo, selection.start.toISOString())
+        : null,
+    [appliedPromo, selection]
+  );
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const guestValid = !!(first.trim() && last.trim() && emailValid);
@@ -161,6 +178,7 @@ export default function BookPage() {
         alcohol,
         addons: selectedAddOns.map((a) => ({ addOnId: a.addOnId, quantity: a.quantity })),
         paymentMethod,
+        promoCode: appliedPromo ?? undefined,
       });
       setHeldBooking(b);
       setHeldBreakdown(breakdown);
@@ -683,6 +701,82 @@ export default function BookPage() {
               </div>
             </dl>
             <div className="p-4 border-t border-card-border space-y-3">
+              {/* Promo code */}
+              {!promoOpen && !appliedPromo ? (
+                <button
+                  type="button"
+                  onClick={() => setPromoOpen(true)}
+                  className="text-[12px] font-medium text-primary hover:underline"
+                  data-testid="button-show-promo"
+                >
+                  Have a promo code?
+                </button>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={promoInput}
+                      onChange={(e) => setPromoInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          setAppliedPromo(promoInput.trim() || null);
+                        }
+                      }}
+                      placeholder="Promo code"
+                      className="h-9 text-sm uppercase"
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                      data-testid="input-promo-code"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 shrink-0"
+                      disabled={!promoInput.trim()}
+                      onClick={() => setAppliedPromo(promoInput.trim() || null)}
+                      data-testid="button-apply-promo"
+                    >
+                      Apply
+                    </Button>
+                    {appliedPromo && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 shrink-0 px-2 text-muted-foreground"
+                        onClick={() => {
+                          setAppliedPromo(null);
+                          setPromoInput("");
+                          setPromoOpen(false);
+                        }}
+                        data-testid="button-clear-promo"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                  {appliedPromo && promoEval && (
+                    <p
+                      className={`text-[11px] ${
+                        breakdown?.promoApplied ? "text-primary" : "text-destructive"
+                      }`}
+                      data-testid="text-promo-status"
+                    >
+                      {breakdown?.promoApplied
+                        ? promoEval.reason
+                        : promoEval.reason || "That promo code isn’t valid."}
+                    </p>
+                  )}
+                  {appliedPromo && !selection && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Pick your session dates — the discount applies to sessions Jun 29–Jul 5, 2026.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <PaymentMethodPicker
                 value={paymentMethod}
                 onChange={setPaymentMethod}

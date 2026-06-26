@@ -39,6 +39,7 @@ export const bookings = sqliteTable("bookings", {
   googleEventId: text("google_event_id"), // tentative or confirmed event id (last known)
   googleCalendarId: text("google_calendar_id"), // calendar the event lives on
   paymentMethod: text("payment_method").notNull().default("zelle"), // zelle | card
+  promoCode: text("promo_code"), // applied promo code (e.g. JULY4WEEK), null if none
   cardFeeAmount: real("card_fee_amount").notNull().default(0), // Stripe surcharge passed to customer
   paidAt: integer("paid_at"), // epoch ms when payment cleared (Stripe webhook only; Zelle stays null)
   stripePaymentIntentId: text("stripe_payment_intent_id"),
@@ -133,6 +134,79 @@ export function guestSurchargeRate(count: number): number {
   return GUEST_TIER_40_RATE;
 }
 
+// ----- Promo codes -----
+// Independence Day Week: 15% off the hourly ROOM RATE (base only — not the guest
+// surcharge, fees, or add-ons) for any session whose NY-local date falls inside
+// the window. Eligibility is purely the session date; the code is redeemable any
+// time up to the end of the window (a session can't be booked after it starts).
+// Single source of truth shared by client preview and server-authoritative math.
+export const PROMO_CODE = "JULY4WEEK";
+export const PROMO_PERCENT = 15;
+export const PROMO_LABEL = "Independence Day Week";
+export const PROMO_SESSION_START = "2026-06-29"; // NY date, inclusive
+export const PROMO_SESSION_END = "2026-07-05"; // NY date, inclusive
+
+// NY-local calendar date (YYYY-MM-DD) of an ISO instant. en-CA renders ISO order.
+function nyDateStr(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+export interface PromoEvaluation {
+  applied: boolean;
+  code: string; // normalized matched code, else ""
+  percent: number; // 0 when not applied
+  reason: string; // human-readable success/why-not message
+}
+
+// Evaluate a typed promo code against a session start. Case-insensitive.
+export function evaluatePromo(
+  rawCode: string | null | undefined,
+  startIso: string
+): PromoEvaluation {
+  const code = (rawCode ?? "").trim().toUpperCase();
+  if (!code) return { applied: false, code: "", percent: 0, reason: "" };
+  if (code !== PROMO_CODE) {
+    return { applied: false, code: "", percent: 0, reason: "That promo code isn’t valid." };
+  }
+  const day = nyDateStr(startIso);
+  if (!day) {
+    return { applied: false, code: "", percent: 0, reason: "Couldn’t read the booking date." };
+  }
+  if (day < PROMO_SESSION_START || day > PROMO_SESSION_END) {
+    return {
+      applied: false,
+      code: "",
+      percent: 0,
+      reason: `${PROMO_LABEL}: 15% off applies only to sessions Jun 29–Jul 5, 2026.`,
+    };
+  }
+  return {
+    applied: true,
+    code: PROMO_CODE,
+    percent: PROMO_PERCENT,
+    reason: `${PROMO_LABEL} — 15% off the room rate applied.`,
+  };
+}
+
+// The dollar discount for a given base (hourly room charge), rounded to cents.
+// Used everywhere the promo touches money so client/server never diverge.
+export function promoDiscountForBase(
+  base: number,
+  rawCode: string | null | undefined,
+  startIso: string
+): number {
+  const e = evaluatePromo(rawCode, startIso);
+  if (!e.applied) return 0;
+  return Math.round(base * e.percent) / 100;
+}
+
 // Public Booking shape used by the client API (matches existing client booking-data.ts shape)
 export const bookingDtoSchema = z.object({
   id: z.string(),
@@ -156,6 +230,7 @@ export const bookingDtoSchema = z.object({
   googleEventId: z.string().optional(),
   googleCalendarId: z.string().optional(),
   paymentMethod: z.enum(["zelle", "card"]).default("zelle"),
+  promoCode: z.string().optional(),
   cardFeeAmount: z.number().default(0),
   paidAt: z.number().optional(),
   stripePaymentIntentId: z.string().optional(),
@@ -187,6 +262,7 @@ export const createHoldSchema = z.object({
     )
     .default([]),
   paymentMethod: z.enum(["zelle", "card"]).default("zelle"),
+  promoCode: z.string().trim().optional(),
 });
 export type CreateHoldInput = z.infer<typeof createHoldSchema>;
 

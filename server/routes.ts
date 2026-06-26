@@ -11,6 +11,7 @@ import {
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
   guestSurchargeRate,
+  promoDiscountForBase,
   type BookingDto,
   type SelectedAddOn,
 } from "@shared/schema";
@@ -306,6 +307,7 @@ function computePreviewBaseTotal(args: {
   guestCount: number;
   alcohol: boolean;
   addons: SelectedAddOn[];
+  promoCode?: string | null;
 }): number {
   const baseRate = ACTIVITY_RATE_USD[args.activityId] ?? 0;
   const hours = Math.max(
@@ -313,7 +315,7 @@ function computePreviewBaseTotal(args: {
     (new Date(args.end).getTime() - new Date(args.start).getTime()) / 36e5
   );
   const surchargeRate = guestSurchargeRate(args.guestCount);
-  const base = baseRate * hours;
+  const base = Math.round(baseRate * hours * 100) / 100;
   const guestSurcharge = surchargeRate * hours;
   const cleaningFee = args.activityId === "event" ? EVENT_CLEANING_FEE : 0;
   const alcoholFee = args.alcohol ? ALCOHOL_FEE : 0;
@@ -321,9 +323,11 @@ function computePreviewBaseTotal(args: {
     (s, a) => s + (a.lineTotal ?? 0),
     0
   );
+  // Promo discounts the hourly room rate (base) only.
+  const promoDiscount = promoDiscountForBase(base, args.promoCode ?? null, args.start);
   return (
     Math.round(
-      (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal) * 100
+      (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount) * 100
     ) / 100
   );
 }
@@ -415,6 +419,7 @@ export async function registerRoutes(
           guestCount: input.guestCount,
           alcohol: input.alcohol,
           addons: resolvedAddons,
+          promoCode: input.promoCode ?? null,
         });
         const piResult = await createDraftPaymentIntent({
           spaceId: input.spaceId,
@@ -431,6 +436,7 @@ export async function registerRoutes(
           alcohol: input.alcohol,
           addons: resolvedAddons,
           baseTotal,
+          promoCode: input.promoCode ?? null,
         });
         if (!piResult.ok) {
           return res.status(502).json({
@@ -458,6 +464,7 @@ export async function registerRoutes(
           // No holdExpiresAt / holdActive — the dialog hides the timer entirely
           // for card customers so they don't see a misleading countdown.
           paymentMethod: "card" as const,
+          promoCode: input.promoCode || undefined,
           cardFeeAmount: piResult.cardFeeAmount,
           createdAt: Date.now(),
           source: "internal" as const,
@@ -864,6 +871,7 @@ export async function registerRoutes(
               alcohol: draft.alcohol,
               addons: draft.addons,
               cardFeeAmount: draft.cardFeeAmount,
+              promoCode: draft.promoCode ?? null,
               stripePaymentIntentId: pi.id,
               paidAt: Date.now(),
             });

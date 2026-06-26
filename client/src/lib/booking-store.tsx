@@ -50,6 +50,7 @@ export type CreateHoldClientInput = {
   alcohol: boolean;
   addons: { addOnId: string; quantity: number }[];
   paymentMethod: PaymentMethod;
+  promoCode?: string;
 };
 
 export type StripeIntentResult = {

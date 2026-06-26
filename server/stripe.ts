@@ -221,7 +221,8 @@ export interface CardBookingDraft {
   guestCount: number;
   alcohol: boolean;
   addons: SelectedAddOn[];
-  baseTotal: number; // dollars (no card fee)
+  baseTotal: number; // dollars (no card fee), already promo-discounted
+  promoCode?: string | null;
 }
 
 export interface CreateDraftPaymentIntentResult {
@@ -265,6 +266,7 @@ function encodeDraftMetadata(draft: CardBookingDraft, cardFeeAmount: number) {
     baseTotal: draft.baseTotal.toFixed(2),
     cardFeeAmount: cardFeeAmount.toFixed(2),
     customerTotal: customerTotal.toFixed(2),
+    ...(draft.promoCode ? { promoCode: draft.promoCode.slice(0, 40) } : {}),
   } as Record<string, string>;
 }
 
@@ -285,6 +287,7 @@ export interface DecodedDraftMetadata {
   baseTotal: number;
   cardFeeAmount: number;
   customerTotal: number;
+  promoCode?: string | null;
 }
 
 export function decodeDraftMetadata(
@@ -309,6 +312,7 @@ export function decodeDraftMetadata(
       baseTotal: Number(metadata.baseTotal) || 0,
       cardFeeAmount: Number(metadata.cardFeeAmount) || 0,
       customerTotal: Number(metadata.customerTotal) || 0,
+      promoCode: metadata.promoCode || null,
     };
   } catch (e) {
     console.error("[stripe] decodeDraftMetadata failed", e);

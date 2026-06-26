@@ -1,6 +1,8 @@
 // Studio Clyx — booking domain types, constants, and seed data.
 // All data is in-memory for the Phase 1 prototype. Future: Supabase + Google Calendar.
 
+import { promoDiscountForBase, PROMO_CODE, PROMO_PERCENT } from "@shared/schema";
+
 export type SpaceId = "studio-1" | "studio-2" | "studio-3" | "lincoln-apartment";
 
 export type ActivityId = "production" | "meeting" | "event";
@@ -386,6 +388,8 @@ export interface PriceBreakdown {
   cleaningFee: number;
   alcoholFee: number;
   addonsTotal: number;
+  promoDiscount: number;
+  promoApplied: boolean;
   cardFee: number;
   subtotal: number; // total without card fee (what merchant nets)
   total: number; // what the customer owes (includes card fee if applicable)
@@ -400,6 +404,8 @@ export interface PriceInput {
   activityId: ActivityId;
   addons: SelectedAddOn[];
   paymentMethod?: PaymentMethod;
+  promoCode?: string | null; // typed promo code (validated against the session date)
+  startIso?: string | null; // session start ISO, needed to validate the promo window
 }
 
 export function round2(n: number): number {
@@ -426,7 +432,7 @@ export function selectedFromCatalog(
 }
 
 export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
-  const { activity, slots, guestCount, alcohol, activityId, addons, paymentMethod } = input;
+  const { activity, slots, guestCount, alcohol, activityId, addons, paymentMethod, promoCode, startIso } = input;
   const hours = slots * 0.5;
   const base = round2(activity.rate * hours);
   const surchargeRate = guestSurchargeRate(guestCount);
@@ -436,8 +442,13 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
   const addonsTotal = round2(
     addons.reduce((sum, a) => sum + (a.lineTotal ?? 0), 0)
   );
+  // Promo: discount the hourly room rate (base) only, when a valid code is
+  // entered AND the session date falls inside the promo window.
+  const promoDiscount =
+    promoCode && startIso ? promoDiscountForBase(base, promoCode, startIso) : 0;
+  const promoApplied = promoDiscount > 0;
   const subtotal = round2(
-    base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal
+    base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount
   );
   const cardFee = paymentMethod === "card" ? computeCardSurcharge(subtotal) : 0;
   const total = round2(subtotal + cardFee);
@@ -472,6 +483,13 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
       amount: a.lineTotal,
     });
   }
+  if (promoDiscount > 0) {
+    lines.push({
+      label: `Promo (${PROMO_CODE})`,
+      detail: `−${PROMO_PERCENT}% room rate`,
+      amount: -promoDiscount,
+    });
+  }
   if (cardFee > 0) {
     lines.push({
       label: "Card processing fee",
@@ -487,6 +505,8 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
     cleaningFee,
     alcoholFee,
     addonsTotal,
+    promoDiscount,
+    promoApplied,
     cardFee,
     subtotal,
     total,

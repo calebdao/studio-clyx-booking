@@ -11,6 +11,8 @@ import {
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
   guestSurchargeRate,
+  promoDiscountForBase,
+  PROMO_PERCENT,
 } from "@shared/schema";
 import {
   SPACE_CALENDAR_ENV,
@@ -329,6 +331,7 @@ interface PriceSummary {
   cleaningFee: number;
   alcoholFee: number;
   addonsTotal: number;
+  promoDiscount: number;
   cardFee: number;
   subtotal: number; // total without card fee (what merchant nets on a successful card charge)
   total: number; // what the customer actually owes (includes card fee if applicable)
@@ -353,8 +356,14 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
   const alcoholFee = booking.alcohol ? ALCOHOL_FEE : 0;
   const addons: SelectedAddOn[] = booking.addons ?? [];
   const addonsTotal = round2(addons.reduce((s, a) => s + (a.lineTotal ?? 0), 0));
+  // Promo: discount the hourly room rate (base) only.
+  const promoDiscount = promoDiscountForBase(
+    base,
+    booking.promoCode ?? null,
+    booking.start
+  );
   const subtotal = round2(
-    base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal
+    base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount
   );
   const cardFee =
     booking.paymentMethod === "card"
@@ -392,6 +401,13 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
       amount: a.lineTotal,
     });
   }
+  if (promoDiscount > 0) {
+    lines.push({
+      label: `Promo ${booking.promoCode}`,
+      detail: `−${PROMO_PERCENT}% room rate`,
+      amount: -promoDiscount,
+    });
+  }
   if (cardFee > 0) {
     lines.push({
       label: "Card processing fee",
@@ -407,6 +423,7 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
     cleaningFee,
     alcoholFee,
     addonsTotal,
+    promoDiscount,
     cardFee,
     subtotal,
     total,

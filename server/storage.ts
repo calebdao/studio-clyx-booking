@@ -16,6 +16,8 @@ import {
   GUEST_MAX,
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
+  promoDiscountForBase,
+  evaluatePromo,
 } from "@shared/schema";
 import type {
   User,
@@ -201,6 +203,7 @@ function ensureColumn(table: string, name: string, ddl: string) {
     sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   }
 }
+ensureColumn("bookings", "promo_code", "promo_code TEXT");
 ensureColumn("agent_conversations", "inquiry_details", "inquiry_details TEXT");
 ensureColumn("agent_drafts", "needs_human", "needs_human INTEGER NOT NULL DEFAULT 0");
 ensureColumn("agent_drafts", "auto_sent", "auto_sent INTEGER NOT NULL DEFAULT 0");
@@ -285,6 +288,7 @@ function rowToDto(r: BookingRow): BookingDto {
     googleCalendarId: r.googleCalendarId ?? undefined,
     paymentMethod:
       (r.paymentMethod as BookingDto["paymentMethod"]) ?? "zelle",
+    promoCode: r.promoCode ?? undefined,
     cardFeeAmount: r.cardFeeAmount ?? 0,
     paidAt: r.paidAt ?? undefined,
     stripePaymentIntentId: r.stripePaymentIntentId ?? undefined,
@@ -395,6 +399,7 @@ function computeServerBaseTotal(args: {
   guestCount: number;
   alcohol: boolean;
   addons: SelectedAddOn[];
+  promoCode?: string | null;
 }): number {
   const baseRate = ACTIVITY_RATE_USD[args.activityId] ?? 0;
   const hours = Math.max(
@@ -402,7 +407,7 @@ function computeServerBaseTotal(args: {
     (new Date(args.end).getTime() - new Date(args.start).getTime()) / 36e5
   );
   const surchargeRate = localGuestSurchargeRate(args.guestCount);
-  const base = baseRate * hours;
+  const base = Math.round(baseRate * hours * 100) / 100;
   const guestSurcharge = surchargeRate * hours;
   const cleaningFee = args.activityId === "event" ? EVENT_CLEANING_FEE : 0;
   const alcoholFee = args.alcohol ? ALCOHOL_FEE : 0;
@@ -410,9 +415,10 @@ function computeServerBaseTotal(args: {
     (s, a) => s + (a.lineTotal ?? 0),
     0
   );
+  const promoDiscount = promoDiscountForBase(base, args.promoCode ?? null, args.start);
   return (
     Math.round(
-      (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal) * 100
+      (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount) * 100
     ) / 100
   );
 }
@@ -462,6 +468,7 @@ export interface IStorage {
     alcohol: boolean;
     addons: Array<{ addOnId: string; quantity: number }>;
     cardFeeAmount: number;
+    promoCode?: string | null;
     stripePaymentIntentId: string;
     paidAt: number;
   }): Promise<
@@ -668,6 +675,10 @@ export class DatabaseStorage implements IStorage {
     // chose Zelle this stays 0; when they chose card we gross up so Stripe's
     // fee is fully absorbed by the customer and the merchant nets the base.
     const paymentMethod = (input.paymentMethod ?? "zelle") as "zelle" | "card";
+    // Validate the promo server-side; only store it when it actually applies
+    // (correct code AND session date inside the window).
+    const promo = evaluatePromo(input.promoCode ?? null, input.start);
+    const promoCode = promo.applied ? promo.code : null;
     const baseTotal = computeServerBaseTotal({
       activityId: input.activityId,
       start: input.start,
@@ -675,6 +686,7 @@ export class DatabaseStorage implements IStorage {
       guestCount: input.guestCount,
       alcohol: input.alcohol ?? false,
       addons: resolvedAddons,
+      promoCode,
     });
     const cardFeeAmount =
       paymentMethod === "card" ? computeCardSurcharge(baseTotal) : 0;
@@ -701,6 +713,7 @@ export class DatabaseStorage implements IStorage {
       googleEventId: null,
       googleCalendarId: null,
       paymentMethod,
+      promoCode,
       cardFeeAmount,
       paidAt: null,
       stripePaymentIntentId: null,
@@ -837,6 +850,7 @@ export class DatabaseStorage implements IStorage {
     alcohol: boolean;
     addons: Array<{ addOnId: string; quantity: number }>;
     cardFeeAmount: number;
+    promoCode?: string | null;
     stripePaymentIntentId: string;
     paidAt: number;
   }): Promise<
@@ -957,6 +971,7 @@ export class DatabaseStorage implements IStorage {
       googleEventId: null,
       googleCalendarId: null,
       paymentMethod: "card",
+      promoCode: args.promoCode ?? null,
       cardFeeAmount: args.cardFeeAmount,
       paidAt: args.paidAt,
       stripePaymentIntentId: args.stripePaymentIntentId,

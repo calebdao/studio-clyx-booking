@@ -90,6 +90,8 @@ const DEFAULT_IGNORE_SUBJECTS = [
   "has been cancelled",
   "booking declined",
   "request expired",
+  "has expired",
+  "invite to",
   "refund",
   "coming up",
   "starts soon",

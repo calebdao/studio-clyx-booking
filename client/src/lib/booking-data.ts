@@ -97,6 +97,8 @@ export const SPACES: Space[] = [
       "Minimal editorial studio with soft earth tones, refined finishes, and French doors to Studio 3 for expanded shoots.",
     swatch: "bg-[#BC7518]", // brass
     hex: "#BC7518",
+    image:
+      "https://images.squarespace-cdn.com/content/v1/666b23ff5801013aa6a66b6f/556b1650-266b-47e3-b49d-241eb977262a/2026+copy2.jpg?format=1000w",
   },
   {
     id: "studio-2",
@@ -106,6 +108,8 @@ export const SPACES: Space[] = [
       "850 sq ft luxury set with velvet textures, rich tones, mid-century pieces, drapery, and a signature wood accent wall.",
     swatch: "bg-[#3F6B6E]", // teal-grey
     hex: "#3F6B6E",
+    image:
+      "https://images.squarespace-cdn.com/content/v1/666b23ff5801013aa6a66b6f/792cec7d-843f-4539-bae6-8fb8450d45b1/DSC00935+copy.jpg?format=1000w",
   },
   {
     id: "studio-3",
@@ -115,6 +119,8 @@ export const SPACES: Space[] = [
       "Sun-drenched lifestyle loft with marble, velvet, travertine, burl wood, and a sculptural bar for events and campaigns.",
     swatch: "bg-[#7A4A2E]", // burnt sienna
     hex: "#7A4A2E",
+    image:
+      "https://images.squarespace-cdn.com/content/v1/666b23ff5801013aa6a66b6f/93f792d6-fa9a-4808-b970-b64c842debe4/DSC00460+copy.jpg?format=1000w",
   },
   {
     id: "lincoln-apartment",
@@ -124,6 +130,8 @@ export const SPACES: Space[] = [
       "Curated mid-century two-bedroom apartment with living room, kitchen, natural light, blush bedroom, and artful details.",
     swatch: "bg-[#3D4A5A]", // slate
     hex: "#3D4A5A",
+    image:
+      "https://images.squarespace-cdn.com/content/v1/666b23ff5801013aa6a66b6f/a5f39162-8558-4781-995c-e303911e2371/IMG_6918+2+copy.jpg?format=1000w",
   },
 ];
 

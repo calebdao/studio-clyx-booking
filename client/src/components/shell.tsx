@@ -49,8 +49,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <main className="flex-1">{children}</main>
       <footer className="border-t border-card-border">
         <div className="max-w-[1280px] mx-auto px-5 lg:px-8 py-6 text-xs text-muted-foreground flex flex-wrap gap-x-6 gap-y-2 justify-between">
-          <span>© Studio Clyx · Booking prototype</span>
-          <span className="font-mono">Phase 1 · No live integrations</span>
+          <span>© {new Date().getFullYear()} Studio Clyx</span>
         </div>
       </footer>
     </div>

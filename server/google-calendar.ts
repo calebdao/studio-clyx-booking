@@ -195,53 +195,57 @@ export async function listEventsForSpace(
     const token = await getAccessToken();
     if (!token) return { ok: false, reason: "simulation" };
     const calendarId = calendarIdForSpace(spaceId)!;
-    const url = new URL(
-      `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`
-    );
-    url.searchParams.set("timeMin", timeMin.toISOString());
-    url.searchParams.set("timeMax", timeMax.toISOString());
-    url.searchParams.set("singleEvents", "true");
-    url.searchParams.set("orderBy", "startTime");
-    url.searchParams.set("maxResults", "250");
 
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      return {
-        ok: false,
-        reason: "error",
-        error: `list events ${res.status}: ${body}`,
+    // Page through all events in the window. Over a 12-month window a busy
+    // studio (bookings + 2 buffer events each) can exceed a single 250-event
+    // page; without following nextPageToken those extra busy slots would be
+    // dropped and shown as free.
+    const events: GoogleEventBusy[] = [];
+    let pageToken: string | undefined;
+    let pages = 0;
+    do {
+      const url = new URL(
+        `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`
+      );
+      url.searchParams.set("timeMin", timeMin.toISOString());
+      url.searchParams.set("timeMax", timeMax.toISOString());
+      url.searchParams.set("singleEvents", "true");
+      url.searchParams.set("orderBy", "startTime");
+      url.searchParams.set("maxResults", "2500");
+      if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        return {
+          ok: false,
+          reason: "error",
+          error: `list events ${res.status}: ${body}`,
+        };
+      }
+      const json = (await res.json()) as {
+        nextPageToken?: string;
+        items?: Array<{
+          id: string;
+          summary?: string;
+          status?: string;
+          transparency?: string;
+          start?: { dateTime?: string; date?: string };
+          end?: { dateTime?: string; date?: string };
+        }>;
       };
-    }
-    const json = (await res.json()) as {
-      items?: Array<{
-        id: string;
-        summary?: string;
-        status?: string;
-        transparency?: string;
-        start?: { dateTime?: string; date?: string };
-        end?: { dateTime?: string; date?: string };
-      }>;
-    };
-    const events: GoogleEventBusy[] = (json.items ?? [])
-      // Skip cancelled and "free" (transparent) events — those don't block.
-      .filter(
-        (e) => e.status !== "cancelled" && e.transparency !== "transparent"
-      )
-      .map((e) => {
+      for (const e of json.items ?? []) {
+        // Skip cancelled and "free" (transparent) events — those don't block.
+        if (e.status === "cancelled" || e.transparency === "transparent") continue;
         const startIso = e.start?.dateTime || dateOnlyToIso(e.start?.date, false);
         const endIso = e.end?.dateTime || dateOnlyToIso(e.end?.date, true);
-        return {
-          id: e.id,
-          spaceId,
-          summary: e.summary,
-          start: startIso,
-          end: endIso,
-        };
-      })
-      .filter((e) => e.start && e.end);
+        if (!startIso || !endIso) continue;
+        events.push({ id: e.id, spaceId, summary: e.summary, start: startIso, end: endIso });
+      }
+      pageToken = json.nextPageToken;
+    } while (pageToken && ++pages < 20); // hard cap so we never loop forever
     return { ok: true, events };
   } catch (e) {
     return {

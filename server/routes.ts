@@ -1287,7 +1287,13 @@ async function mergeGoogleCalendarBusy(
   const spaceIds = Object.keys(SPACE_CALENDAR_ENV) as BookingDto["spaceId"][];
   const now = new Date();
   const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const windowEnd = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
+  // Must cover the whole bookable range: guests can book up to
+  // BOOKING_WINDOW_MONTHS out, so Google-blocked slots that far ahead have to be
+  // merged too — otherwise the scheduler shows them as free. (~31 days/mo + a few
+  // days of slack.)
+  const windowEnd = new Date(
+    now.getTime() + (BOOKING_WINDOW_MONTHS * 31 + 7) * 24 * 60 * 60 * 1000
+  );
 
   // Don't double-render our own hold/confirmed Google events: skip any event
   // whose id matches a known internal booking's googleEventId.

@@ -552,13 +552,23 @@ export function bookingsToOccupiedSlots(
   spaceId: SpaceId
 ): Map<string, Booking> {
   const map = new Map<string, Booking>();
+  const SLOT_MS = SLOT_MINUTES * 60 * 1000;
   for (const b of bookings) {
     if (b.spaceId !== spaceId) continue;
-    let cursor = new Date(b.start);
-    const end = new Date(b.end);
-    while (cursor < end) {
-      map.set(cursor.toISOString(), b);
-      cursor = addMinutes(cursor, SLOT_MINUTES);
+    const startMs = new Date(b.start).getTime();
+    const endMs = new Date(b.end).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
+      continue;
+    // Mark every 30-min slot the booking OVERLAPS, not just exact-boundary
+    // matches. Google Calendar events (manual blocks, synced Peerspace/Giggster
+    // events, all-day blocks) can start/end at off-grid times like 9:15; flooring
+    // the start to the slot grid ensures those still block the slots they cover.
+    // Epoch 0 sits on a 30-min boundary, so flooring the ms epoch yields keys
+    // that align with the scheduler's :00/:30 slot cells.
+    let cursorMs = Math.floor(startMs / SLOT_MS) * SLOT_MS;
+    while (cursorMs < endMs) {
+      map.set(new Date(cursorMs).toISOString(), b);
+      cursorMs += SLOT_MS;
     }
   }
   return map;

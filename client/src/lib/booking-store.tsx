@@ -96,23 +96,17 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
 
   const { adminPin } = useAdminPinInternal();
 
-  // The public feed carries no guest PII (server strips it). When an operator is
-  // unlocked, pull the full records from the PIN-protected admin feed instead so
-  // the dashboard can show contact details and pricing.
+  // Availability ALWAYS comes from the public feed (server strips PII from it).
+  // This drives the guest scheduler, so it must never depend on the admin feed —
+  // otherwise an admin-auth hiccup would blank the calendar and show every slot
+  // as free. The admin dashboard pulls full records separately via
+  // useAdminBookings().
   const query = useQuery<Booking[]>({
-    queryKey: adminPin ? ADMIN_BOOKINGS_KEY : BOOKINGS_KEY,
+    queryKey: BOOKINGS_KEY,
     // Bookings drift over time (holds expire) so don't cache forever.
     staleTime: 15_000,
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
-    queryFn: adminPin
-      ? async () => {
-          const res = await apiRequest("GET", "/api/admin/bookings", undefined, {
-            headers: { "x-admin-pin": adminPin },
-          });
-          return (await res.json()) as Booking[];
-        }
-      : undefined,
   });
 
   const [mutationPendingId, setMutationPendingId] = useState<string | null>(null);
@@ -218,6 +212,25 @@ export function useBookings() {
 export function useBookingsForSpace(spaceId: SpaceId) {
   const { bookings } = useBookings();
   return bookings.filter((b) => b.spaceId === spaceId);
+}
+
+// Full booking records (guest name, email, pricing) for the operator dashboard.
+// PIN-gated; separate from the public availability feed used by the scheduler.
+export function useAdminBookings() {
+  const { adminPin } = useAdmin();
+  return useQuery<Booking[]>({
+    queryKey: ADMIN_BOOKINGS_KEY,
+    enabled: !!adminPin,
+    staleTime: 15_000,
+    refetchInterval: adminPin ? 30_000 : false,
+    refetchOnWindowFocus: true,
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/bookings", undefined, {
+        headers: { "x-admin-pin": adminPin ?? "" },
+      });
+      return (await res.json()) as Booking[];
+    },
+  });
 }
 
 // ----- Admin PIN context (in-memory only — no localStorage/sessionStorage/cookies) -----

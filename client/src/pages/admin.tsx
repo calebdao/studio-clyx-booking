@@ -18,6 +18,7 @@ import {
   useAdminAddOns,
   useAddOnMutations,
   useBookings,
+  useAdminBookings,
   useAgentConversations,
   useAgentDraftActions,
   useAgentKnowledge,
@@ -116,13 +117,16 @@ export default function AdminPage() {
 
 function AdminConsole() {
   const {
-    bookings,
     confirmPaymentAsync,
     releaseHoldAsync,
     rejectBookingAsync,
     now,
     mutationPendingId,
   } = useBookings();
+  // Full records (with guest contact + pricing) from the PIN-gated feed. The
+  // shared context only carries the public, PII-stripped availability.
+  const { data: adminBookings } = useAdminBookings();
+  const bookings = adminBookings ?? [];
   const { lock } = useAdmin();
   const { toast } = useToast();
   const [confirmId, setConfirmId] = useState<string | null>(null);

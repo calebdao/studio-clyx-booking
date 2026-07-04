@@ -77,6 +77,14 @@ export type StripeConfig = {
 const BookingContext = createContext<BookingCtx | null>(null);
 
 const BOOKINGS_KEY = ["/api/bookings"] as const;
+const ADMIN_BOOKINGS_KEY = ["/api/admin/bookings"] as const;
+
+// Invalidate whichever bookings feed is active (public vs admin) after a change.
+function invalidateBookings() {
+  for (const key of [BOOKINGS_KEY, ADMIN_BOOKINGS_KEY]) {
+    queryClient.invalidateQueries({ queryKey: key });
+  }
+}
 
 export function BookingProvider({ children }: { children: React.ReactNode }) {
   const [now, setNow] = useState<Date>(new Date());
@@ -86,15 +94,26 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(t);
   }, []);
 
+  const { adminPin } = useAdminPinInternal();
+
+  // The public feed carries no guest PII (server strips it). When an operator is
+  // unlocked, pull the full records from the PIN-protected admin feed instead so
+  // the dashboard can show contact details and pricing.
   const query = useQuery<Booking[]>({
-    queryKey: BOOKINGS_KEY,
+    queryKey: adminPin ? ADMIN_BOOKINGS_KEY : BOOKINGS_KEY,
     // Bookings drift over time (holds expire) so don't cache forever.
     staleTime: 15_000,
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
+    queryFn: adminPin
+      ? async () => {
+          const res = await apiRequest("GET", "/api/admin/bookings", undefined, {
+            headers: { "x-admin-pin": adminPin },
+          });
+          return (await res.json()) as Booking[];
+        }
+      : undefined,
   });
-
-  const { adminPin } = useAdminPinInternal();
 
   const [mutationPendingId, setMutationPendingId] = useState<string | null>(null);
 
@@ -107,7 +126,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       return (await res.json()) as Booking & { _stripe?: StripeIntentResult };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY });
+      invalidateBookings();
     },
   });
 
@@ -124,7 +143,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     },
     onSettled: () => {
       setMutationPendingId(null);
-      queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY });
+      invalidateBookings();
     },
   });
 
@@ -137,7 +156,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     },
     onSettled: () => {
       setMutationPendingId(null);
-      queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY });
+      invalidateBookings();
     },
   });
 
@@ -150,7 +169,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     },
     onSettled: () => {
       setMutationPendingId(null);
-      queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY });
+      invalidateBookings();
     },
   });
 
@@ -160,7 +179,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       isLoading: query.isLoading,
       isError: query.isError,
       refetch: () => {
-        queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY });
+        invalidateBookings();
       },
       now,
       createHoldAsync: (input) => createHoldMutation.mutateAsync(input),

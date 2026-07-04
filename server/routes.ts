@@ -367,12 +367,55 @@ export async function registerRoutes(
   startAddonReminderScheduler();
 
   // ----- Bookings -----
+  // Public availability feed. This endpoint is unauthenticated and served to
+  // every visitor's browser, so it must carry NO personal data — only what the
+  // scheduler needs to render a slot as free/taken. Guest name/email/phone,
+  // pricing, add-ons, payment + promo details are stripped. Operators get the
+  // full records from the PIN-protected /api/admin/bookings below.
+  function toPublicAvailability(b: BookingDto) {
+    return {
+      id: b.id,
+      spaceId: b.spaceId,
+      activityId: b.activityId,
+      start: b.start,
+      end: b.end,
+      status: b.status,
+      holdExpiresAt: b.holdExpiresAt,
+      holdActive: b.holdActive,
+      source: b.source,
+      // Neutral placeholders so the shape stays a valid Booking client-side
+      // without leaking anyone's identity.
+      guest: { firstName: "", lastName: "", email: "" },
+      guestCount: 1,
+      alcohol: false,
+      addons: [],
+      paymentMethod: "zelle" as const,
+      cardFeeAmount: 0,
+      createdAt: b.createdAt,
+    };
+  }
+
+  async function listMergedBookings(): Promise<BookingDto[]> {
+    // opportunistic sweep so listings reflect current reality
+    await storage.expireHolds(Date.now());
+    const bookings = await storage.listBookings();
+    return mergeGoogleCalendarBusy(bookings);
+  }
+
   app.get("/api/bookings", async (_req, res, next) => {
     try {
-      // opportunistic sweep so listings reflect current reality
-      await storage.expireHolds(Date.now());
-      const bookings = await storage.listBookings();
-      const merged = await mergeGoogleCalendarBusy(bookings);
+      const merged = await listMergedBookings();
+      res.json(merged.map(toPublicAvailability));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Operator-only: full booking records (guest contact details, pricing, etc.).
+  // PIN-gated so guest PII is never exposed on the public feed above.
+  app.get("/api/admin/bookings", requireAdmin, async (_req, res, next) => {
+    try {
+      const merged = await listMergedBookings();
       res.json(merged);
     } catch (e) {
       next(e);

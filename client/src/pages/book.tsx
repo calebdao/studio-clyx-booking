@@ -330,30 +330,52 @@ export default function BookPage() {
                     }}
                     data-testid={`button-space-${s.id}`}
                     className={cn(
-                      "relative text-left rounded-md border p-4 transition group",
+                      "relative text-left rounded-md border overflow-hidden transition group",
                       "hover-elevate active-elevate-2",
                       active
                         ? "border-primary bg-primary/5"
                         : "border-card-border bg-card"
                     )}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="inline-block w-2.5 h-2.5 rounded-sm"
-                            style={{ background: s.hex }}
-                            aria-hidden
-                          />
-                          <span className="font-medium tracking-tight">{s.name}</span>
+                    {/* Studio photo (or a colored fallback until one is set) so
+                        guests recognize which room they're booking. */}
+                    <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted">
+                      {s.image ? (
+                        <img
+                          src={s.image}
+                          alt={`${s.name} studio`}
+                          loading="lazy"
+                          className="absolute inset-0 h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div
+                          className="absolute inset-0 flex items-center justify-center"
+                          style={{ background: s.hex }}
+                          aria-hidden
+                        >
+                          <span className="text-lg font-semibold tracking-tight text-white/90">
+                            {s.shortName}
+                          </span>
                         </div>
-                        <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-                          {s.description}
-                        </p>
-                      </div>
-                      {active && (
-                        <span className="text-eyebrow text-primary mt-0.5">Selected</span>
                       )}
+                      {active && (
+                        <span className="absolute top-2 right-2 rounded bg-primary px-1.5 py-0.5 text-eyebrow text-primary-foreground shadow-sm">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-4">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
+                          style={{ background: s.hex }}
+                          aria-hidden
+                        />
+                        <span className="font-medium tracking-tight">{s.name}</span>
+                      </div>
+                      <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                        {s.description}
+                      </p>
                     </div>
                   </button>
                 );

@@ -41,6 +41,11 @@ export interface Space {
   description: string;
   swatch: string; // tailwind text class for the space's calendar swatch (used in admin)
   hex: string;
+  // Photo shown on the booking page so guests recognize the room. Either a full
+  // URL (e.g. a hosted Peerspace/Squarespace image) or a path to a file in
+  // client/public (e.g. "/studios/studio-1.jpg"). Optional — falls back to a
+  // colored block with the short name until a photo is set.
+  image?: string;
 }
 
 export interface Activity {

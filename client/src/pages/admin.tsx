@@ -906,14 +906,13 @@ function CalendarPreview({ bookings }: { bookings: Booking[] }) {
         </div>
       </div>
 
-      {/* Future integration callout */}
+      {/* Integration callout */}
       <div className="rounded-md border border-dashed border-card-border bg-background/40 p-4 text-xs text-muted-foreground flex items-start gap-3">
         <ExternalLink className="w-3.5 h-3.5 mt-0.5 shrink-0" />
         <div>
-          <span className="font-medium text-foreground">Future integration:</span> when wired up,
-          each space writes to its own Google Calendar (4 calendars total). Reads from Peerspace and
-          Giggster events on those calendars are honored as blocked time. Confirmation emails are
-          sent through Resend. None of this is live in the prototype.
+          <span className="font-medium text-foreground">Integrations:</span> each space writes to its
+          own Google Calendar (4 calendars total). Peerspace and Giggster events on those calendars
+          are honored as blocked time. Confirmation emails are sent through Resend.
         </div>
       </div>
     </div>

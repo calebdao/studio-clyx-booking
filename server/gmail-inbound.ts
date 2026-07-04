@@ -80,6 +80,7 @@ const DEFAULT_IGNORE_SUBJECTS = [
   "payment received",
   "you've been paid",
   "payout",
+  "is on the way",
   "receipt",
   "leave a review",
   "review your",
@@ -98,14 +99,18 @@ const DEFAULT_IGNORE_SUBJECTS = [
 ];
 
 // Peerspace operational nudges to the host (response-rate prompts, "respond now"
-// payout reminders, etc.) are signed by the "Host success team" and aren't guest
-// messages — a reliable body-level backstop in case the subject varies.
+// payout reminders, payout-on-the-way notices, etc.) aren't guest messages — a
+// reliable body-level backstop in case the subject filter misses them.
 function isHostOpsEmail(text: string | null): boolean {
   if (!text) return false;
   return (
     /host success team/i.test(text) ||
     /protect your response rate/i.test(text) ||
-    (/\brespond now\b/i.test(text) && /response rate/i.test(text))
+    (/\brespond now\b/i.test(text) && /response rate/i.test(text)) ||
+    // Payout notifications, e.g. "Your payout of $664.00 is on the way".
+    /your payout of/i.test(text) ||
+    /payout of \$[\d,]/i.test(text) ||
+    /payout is on the way/i.test(text)
   );
 }
 

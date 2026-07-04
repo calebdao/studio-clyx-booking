@@ -392,7 +392,7 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                           <Lock className="w-2.5 h-2.5 shrink-0" aria-hidden />
                           <span className="truncate">
                             {occupied.status === "confirmed"
-                              ? `${occupied.guest.firstName} ${occupied.guest.lastName.charAt(0)}.`
+                              ? "Booked"
                               : occupied.status === "held"
                               ? "On hold"
                               : "Pending pmt"}

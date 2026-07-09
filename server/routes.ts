@@ -124,22 +124,39 @@ const DTMF_FREQS: Record<string, [number, number]> = {
   "0": [941, 1336], "*": [941, 1209], "#": [941, 1477],
 };
 
-// Generate a mono 8 kHz 16-bit PCM WAV of a single DTMF digit held for `seconds`.
-// `<Play digits>` only emits a ~0.5s beep; an intercom latch usually needs the
-// tone SUSTAINED (like holding the key), so we serve a long tone as audio.
+// G.711 μ-law encode a 16-bit linear sample to one byte. μ-law @ 8 kHz is the
+// PSTN-native codec Twilio uses internally, so a μ-law WAV is the format Twilio
+// reliably plays (a 16-bit PCM WAV was served fine but Twilio wouldn't play it).
+function linearToMuLaw(sample: number): number {
+  const BIAS = 132;
+  const CLIP = 32635;
+  let sign = 0;
+  if (sample < 0) {
+    sign = 0x80;
+    sample = -sample;
+  }
+  if (sample > CLIP) sample = CLIP;
+  sample += BIAS;
+  let exponent = 7;
+  for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; exponent--, mask >>= 1);
+  const mantissa = (sample >> (exponent + 3)) & 0x0f;
+  return ~(sign | (exponent << 4) | mantissa) & 0xff;
+}
+
+// Generate a mono 8 kHz μ-law WAV of a single DTMF digit held for `seconds`.
+// `<Play digits>` only emits a ~0.5s beep and can't be truly sustained; an
+// intercom latch that needs the tone HELD gets this continuous audio instead.
 function buildDtmfWav(digit: string, seconds: number): Buffer {
   const sampleRate = 8000;
   const n = Math.floor(sampleRate * seconds);
   const [f1, f2] = DTMF_FREQS[digit] || DTMF_FREQS["9"];
-  const data = Buffer.alloc(n * 2);
-  // Each tone pair peaks near full scale. Use 0.4 per component so the summed
-  // signal (0.8 peak) is loud and clearly audible without clipping — a too-quiet
-  // tone can be inaudible on the call and may not trip the intercom relay.
+  const data = Buffer.alloc(n);
+  // 0.4 per component → 0.8 combined peak: loud without clipping.
   const amp = 0.4 * 32767;
   for (let i = 0; i < n; i++) {
     const t = i / sampleRate;
     const s = amp * (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t));
-    data.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(s))), i * 2);
+    data[i] = linearToMuLaw(Math.max(-32768, Math.min(32767, Math.round(s))));
   }
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
@@ -147,12 +164,12 @@ function buildDtmfWav(digit: string, seconds: number): Buffer {
   header.write("WAVE", 8);
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(7, 20); // 7 = μ-law
   header.writeUInt16LE(1, 22); // mono
   header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
-  header.writeUInt16LE(2, 32); // block align
-  header.writeUInt16LE(16, 34); // bits per sample
+  header.writeUInt32LE(sampleRate, 28); // byte rate (1 byte/sample)
+  header.writeUInt16LE(1, 32); // block align
+  header.writeUInt16LE(8, 34); // bits per sample
   header.write("data", 36);
   header.writeUInt32LE(data.length, 40);
   return Buffer.concat([header, data]);

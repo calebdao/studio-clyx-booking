@@ -175,14 +175,17 @@ function doorToneSeconds(): number {
 }
 
 // The TwiML body that actually opens the door: pause so the line is up, then the
-// open tone, then hang up. By default plays a SUSTAINED tone (the held-key fix);
-// set DOOR_TONE_HOLD=false to fall back to the short `<Play digits>` beep.
+// open tone, then hang up. Default = Twilio NATIVE DTMF (`<Play digits>`), which
+// injects a real DTMF signal the intercom detects reliably. Set DOOR_OPEN_DTMF to
+// a repeated string (e.g. "999") for a longer tone. The served-WAV "held tone"
+// (DOOR_TONE_HOLD=true) is opt-in/experimental — some carriers/Twilio don't play
+// it, so it's off by default.
 function openToneTwiml(baseUrl?: string): string {
   const pause = Math.max(
     0,
     Math.min(10, Number(process.env.DOOR_OPEN_PAUSE_SECONDS ?? 1) || 1)
   );
-  const hold = (process.env.DOOR_TONE_HOLD ?? "true").toLowerCase() !== "false";
+  const hold = (process.env.DOOR_TONE_HOLD ?? "false").toLowerCase() === "true";
   const repeat = Math.max(1, Math.min(5, Number(process.env.DOOR_TONE_REPEAT ?? 1) || 1));
   let body: string;
   if (hold && baseUrl) {

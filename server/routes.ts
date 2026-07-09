@@ -431,11 +431,36 @@ export async function registerRoutes(
     };
   }
 
+  // /api/bookings is polled every ~30s by every visitor, and the Google Calendar
+  // merge (12 months × 4 calendars, paginated) is heavy. Fetching it on every
+  // request pins CPU/memory and can crash the instance. Cache the merged result
+  // briefly; a single in-flight fetch is shared, and booking mutations invalidate
+  // it so changes still show promptly.
+  let mergedCache: { at: number; data: BookingDto[] } | null = null;
+  let mergedInflight: Promise<BookingDto[]> | null = null;
+  const MERGED_TTL_MS = 45_000;
+
+  function invalidateMergedBookings() {
+    mergedCache = null;
+  }
+
   async function listMergedBookings(): Promise<BookingDto[]> {
-    // opportunistic sweep so listings reflect current reality
-    await storage.expireHolds(Date.now());
-    const bookings = await storage.listBookings();
-    return mergeGoogleCalendarBusy(bookings);
+    const now = Date.now();
+    if (mergedCache && now - mergedCache.at < MERGED_TTL_MS) return mergedCache.data;
+    if (mergedInflight) return mergedInflight;
+    mergedInflight = (async () => {
+      // opportunistic sweep so listings reflect current reality
+      await storage.expireHolds(Date.now());
+      const bookings = await storage.listBookings();
+      const merged = await mergeGoogleCalendarBusy(bookings);
+      mergedCache = { at: Date.now(), data: merged };
+      return merged;
+    })();
+    try {
+      return await mergedInflight;
+    } finally {
+      mergedInflight = null;
+    }
   }
 
   app.get("/api/bookings", async (_req, res, next) => {
@@ -565,6 +590,7 @@ export async function registerRoutes(
       // Zelle path — unchanged behavior. Create the booking, hold the slot,
       // push the Google Calendar event, fire the owner alert.
       const booking = await storage.createHold(input);
+      invalidateMergedBookings();
 
       try {
         const cal = await pushHoldToCalendar(booking);
@@ -674,6 +700,7 @@ export async function registerRoutes(
   async function runConfirmChain(bookingId: string) {
     const booking = await storage.confirmBooking(bookingId);
     if (!booking) throw httpError(404, "Booking not found.");
+    invalidateMergedBookings();
     let calendar: Awaited<ReturnType<typeof pushBookingToCalendar>>;
     try {
       calendar = await pushBookingToCalendar(booking);
@@ -740,6 +767,7 @@ export async function registerRoutes(
       const existing = await storage.getBooking(String(req.params.id));
       if (!existing) throw httpError(404, "Booking not found.");
       const booking = await storage.rejectBooking(String(req.params.id));
+      invalidateMergedBookings();
       if (booking?.googleEventId && booking?.googleCalendarId) {
         try {
           await removeCalendarEvent(booking);
@@ -787,6 +815,7 @@ export async function registerRoutes(
         }
       }
       const ok = await storage.releaseBooking(String(req.params.id));
+      invalidateMergedBookings();
       if (!ok) throw httpError(404, "Booking not found.");
       res.json({ ok: true });
     } catch (e) {
@@ -954,6 +983,7 @@ export async function registerRoutes(
               stripePaymentIntentId: pi.id,
               paidAt: Date.now(),
             });
+            invalidateMergedBookings();
             if (!result.ok) {
               // Race: slot was taken between Book Now and payment success.
               console.warn(

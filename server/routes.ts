@@ -158,20 +158,30 @@ function buildDtmfWav(digit: string, seconds: number): Buffer {
     const s = amp * (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t));
     data[i] = linearToMuLaw(Math.max(-32768, Math.min(32767, Math.round(s))));
   }
-  const header = Buffer.alloc(44);
+  // Non-PCM WAV (μ-law, format 7) must use an 18-byte fmt chunk (with cbSize)
+  // AND a `fact` chunk giving the sample count. Strict decoders like Twilio
+  // reject a μ-law file that reuses the 16-byte PCM-style header → silence.
+  const header = Buffer.alloc(58);
   header.write("RIFF", 0);
-  header.writeUInt32LE(36 + data.length, 4);
+  header.writeUInt32LE(50 + data.length, 4); // file size - 8
   header.write("WAVE", 8);
+  // fmt chunk (18 bytes)
   header.write("fmt ", 12);
-  header.writeUInt32LE(16, 16);
+  header.writeUInt32LE(18, 16);
   header.writeUInt16LE(7, 20); // 7 = μ-law
   header.writeUInt16LE(1, 22); // mono
   header.writeUInt32LE(sampleRate, 24);
   header.writeUInt32LE(sampleRate, 28); // byte rate (1 byte/sample)
   header.writeUInt16LE(1, 32); // block align
   header.writeUInt16LE(8, 34); // bits per sample
-  header.write("data", 36);
-  header.writeUInt32LE(data.length, 40);
+  header.writeUInt16LE(0, 36); // cbSize
+  // fact chunk (required for non-PCM)
+  header.write("fact", 38);
+  header.writeUInt32LE(4, 42);
+  header.writeUInt32LE(n, 46); // number of samples
+  // data chunk
+  header.write("data", 50);
+  header.writeUInt32LE(data.length, 54);
   return Buffer.concat([header, data]);
 }
 

@@ -206,7 +206,10 @@ function openToneTwiml(baseUrl?: string): string {
   const repeat = Math.max(1, Math.min(5, Number(process.env.DOOR_TONE_REPEAT ?? 1) || 1));
   let body: string;
   if (hold && baseUrl) {
-    const url = `${baseUrl}/api/voice/tone.wav`;
+    // Version the URL (digit + length + codec rev) so Twilio's media cache never
+    // serves a stale copy from before a tone change.
+    const ver = `${doorOpenDigit()}-${doorToneSeconds()}-ulaw`;
+    const url = `${baseUrl}/api/voice/tone.wav?v=${ver}`;
     body = `<Play>${url}</Play>`.repeat(repeat);
   } else {
     const dtmf = ((process.env.DOOR_OPEN_DTMF ?? "9").replace(/[^0-9wW#*]/g, "")) || "9";
@@ -1262,9 +1265,13 @@ export async function registerRoutes(
   });
 
   // Sustained DTMF open-tone as audio (the held-key fix). Served so Twilio can
-  // <Play> a long tone instead of the short <Play digits> beep.
+  // <Play> a long tone instead of the short <Play digits> beep. Twilio caches
+  // <Play> media by URL; without no-cache it can keep serving a stale/broken
+  // version, so force a fresh fetch every call.
   app.get("/api/voice/tone.wav", (_req, res) => {
     const wav = buildDtmfWav(doorOpenDigit(), doorToneSeconds());
+    res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.set("Pragma", "no-cache");
     res.type("audio/wav").send(wav);
   });
 

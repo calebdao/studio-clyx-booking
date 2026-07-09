@@ -132,10 +132,13 @@ function buildDtmfWav(digit: string, seconds: number): Buffer {
   const n = Math.floor(sampleRate * seconds);
   const [f1, f2] = DTMF_FREQS[digit] || DTMF_FREQS["9"];
   const data = Buffer.alloc(n * 2);
-  const amp = 0.3 * 32767;
+  // Each tone pair peaks near full scale. Use 0.4 per component so the summed
+  // signal (0.8 peak) is loud and clearly audible without clipping — a too-quiet
+  // tone can be inaudible on the call and may not trip the intercom relay.
+  const amp = 0.4 * 32767;
   for (let i = 0; i < n; i++) {
     const t = i / sampleRate;
-    const s = (amp * (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t))) / 2;
+    const s = amp * (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t));
     data.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(s))), i * 2);
   }
   const header = Buffer.alloc(44);

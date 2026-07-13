@@ -75,6 +75,12 @@ export default function BookPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
+  const [firstTouched, setFirstTouched] = useState(false);
+  const [lastTouched, setLastTouched] = useState(false);
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  // Set when the guest tries to Book Now with something missing, so every
+  // required field surfaces its error at once (not just the ones they touched).
+  const [attemptedBook, setAttemptedBook] = useState(false);
 
   const [spaceId, setSpaceId] = useState<SpaceId>("studio-1");
   const [activityId, setActivityId] = useState<ActivityId>("production");
@@ -154,8 +160,28 @@ export default function BookPage() {
   );
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  const guestValid = !!(first.trim() && last.trim() && emailValid);
+  // Phone is now required: need at least 7 digits (ignores spaces/dashes/parens).
+  const phoneValid = phone.replace(/\D/g, "").length >= 7;
+  const guestValid = !!(first.trim() && last.trim() && emailValid && phoneValid);
   const guestCountValid = Number.isInteger(guestCount) && guestCount >= GUEST_MIN && guestCount <= GUEST_MAX;
+
+  // Per-field error text: shown once the guest has touched a field or tried to book.
+  const firstError =
+    (firstTouched || attemptedBook) && !first.trim() ? "First name is required." : undefined;
+  const lastError =
+    (lastTouched || attemptedBook) && !last.trim() ? "Last name is required." : undefined;
+  const emailError =
+    (emailTouched || attemptedBook) && !email.trim()
+      ? "Email is required."
+      : (emailTouched || attemptedBook) && !emailValid
+      ? "Use a valid email."
+      : undefined;
+  const phoneError =
+    (phoneTouched || attemptedBook) && !phone.trim()
+      ? "Phone number is required."
+      : (phoneTouched || attemptedBook) && !phoneValid
+      ? "Enter a valid phone number."
+      : undefined;
 
   function setAddonQuantity(item: AddOnCatalogItem, qty: number) {
     setAddonQty((prev) => {
@@ -168,7 +194,13 @@ export default function BookPage() {
   }
 
   async function handleBookNow() {
-    if (!isComplete || !selection || !guestValid || !guestCountValid || !policyAccepted || createHoldPending) return;
+    // Surface every missing required field (red * + inline message) if they try
+    // to book with something incomplete.
+    if (!guestValid || !guestCountValid) {
+      setAttemptedBook(true);
+      return;
+    }
+    if (!isComplete || !selection || !policyAccepted || createHoldPending) return;
     try {
       const b = await createHoldAsync({
         spaceId,
@@ -280,42 +312,49 @@ export default function BookPage() {
           {/* Guest form */}
           <Section title="Guest" eyebrow="01">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="First name" required>
+              <Field label="First name" required error={firstError}>
                 <Input
                   value={first}
                   onChange={(e) => setFirst(e.target.value)}
+                  onBlur={() => setFirstTouched(true)}
                   placeholder="Alex"
+                  aria-invalid={!!firstError}
+                  className={firstError ? "border-destructive" : undefined}
                   data-testid="input-first-name"
                 />
               </Field>
-              <Field label="Last name" required>
+              <Field label="Last name" required error={lastError}>
                 <Input
                   value={last}
                   onChange={(e) => setLast(e.target.value)}
+                  onBlur={() => setLastTouched(true)}
                   placeholder="Morales"
+                  aria-invalid={!!lastError}
+                  className={lastError ? "border-destructive" : undefined}
                   data-testid="input-last-name"
                 />
               </Field>
-              <Field
-                label="Email"
-                required
-                error={emailTouched && email && !emailValid ? "Use a valid email." : undefined}
-              >
+              <Field label="Email" required error={emailError}>
                 <Input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   onBlur={() => setEmailTouched(true)}
                   placeholder="alex@studio.com"
+                  aria-invalid={!!emailError}
+                  className={emailError ? "border-destructive" : undefined}
                   data-testid="input-email"
                 />
               </Field>
-              <Field label="Phone" hint="Optional">
+              <Field label="Phone" required error={phoneError}>
                 <Input
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  onBlur={() => setPhoneTouched(true)}
                   placeholder="(212) 555-0181"
+                  aria-invalid={!!phoneError}
+                  className={phoneError ? "border-destructive" : undefined}
                   data-testid="input-phone"
                 />
               </Field>
@@ -912,13 +951,10 @@ export default function BookPage() {
                 size="lg"
                 className="w-full text-sm"
                 onClick={handleBookNow}
-                disabled={
-                  !isComplete ||
-                  !guestValid ||
-                  !guestCountValid ||
-                  !policyAccepted ||
-                  createHoldPending
-                }
+                // Stay clickable when guest details are missing so the click can
+                // surface the red required-field messages. Only hard-disable
+                // while a hold is being placed.
+                disabled={createHoldPending}
                 data-testid="button-book-now"
               >
                 {createHoldPending ? "Placing hold…" : "Book now"}
@@ -1174,10 +1210,15 @@ function Field({
   return (
     <div>
       <Label className="text-xs font-medium mb-1.5 flex items-center gap-1.5">
-        {label}
-        {required ? (
-          <span className="text-primary text-[10px]">required</span>
-        ) : hint ? (
+        <span>
+          {label}
+          {required && (
+            <span className="text-destructive ml-0.5" aria-hidden>
+              *
+            </span>
+          )}
+        </span>
+        {!required && hint ? (
           <span className="text-muted-foreground text-[10px]">{hint}</span>
         ) : null}
       </Label>

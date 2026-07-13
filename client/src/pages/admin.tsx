@@ -985,7 +985,9 @@ function AddOnsManager() {
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {addons.map((item) => (
+          {[...addons]
+            .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+            .map((item) => (
             <div
               key={item.id}
               data-testid={`row-admin-addon-${item.id}`}

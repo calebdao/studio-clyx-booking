@@ -582,6 +582,10 @@ export default function BookPage() {
                         ? !item.category
                         : item.category === addonCategory
                     )
+                    .slice()
+                    .sort((a, b) =>
+                      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+                    )
                     .map((item) => {
                   const qty = addonQty[item.id] ?? 0;
                   const selected = qty > 0;

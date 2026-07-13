@@ -18,7 +18,8 @@ export type AddOnCategory =
   | "grip"
   | "lighting"
   | "expendables"
-  | "computers";
+  | "computers"
+  | "production";
 
 export interface AddOnCatalogItem {
   id: string;

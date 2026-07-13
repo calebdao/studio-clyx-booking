@@ -949,12 +949,18 @@ function AddOnsManager() {
   }
 
   async function handleDelete(item: AddOnCatalogItem) {
-    if (!confirm(`Deactivate "${item.name}"? Guests will no longer see it.`)) return;
+    if (
+      !confirm(
+        `Permanently delete "${item.name}"? This removes it from the catalog for good and cannot be undone. (Past bookings keep their own copy.) To just hide it from guests, use Deactivate instead.`
+      )
+    )
+      return;
     try {
       await remove.mutateAsync(item.id);
+      toast({ title: "Add-on deleted", description: `"${item.name}" was permanently removed.` });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Could not deactivate add-on.";
-      toast({ title: "Could not deactivate", description: msg.replace(/^\d+:\s*/, ""), variant: "destructive" });
+      const msg = err instanceof Error ? err.message : "Could not delete add-on.";
+      toast({ title: "Could not delete", description: msg.replace(/^\d+:\s*/, ""), variant: "destructive" });
     }
   }
 

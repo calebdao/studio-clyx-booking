@@ -868,10 +868,13 @@ export async function registerRoutes(
 
   app.delete("/api/admin/addons/:id", requireAdmin, async (req, res, next) => {
     try {
-      // Soft-deactivate by default so historical bookings preserve item names.
-      const updated = await storage.setAddOnActive(String(req.params.id), false);
-      if (!updated) throw httpError(404, "Add-on not found.");
-      res.json({ ok: true, addOn: updated });
+      // Permanent hard delete. Safe for historical bookings: each booking stores
+      // a snapshot of its add-ons (name/price/qty) in its own row, so removing
+      // the catalog item doesn't alter past bookings. (Use the Deactivate toggle
+      // to merely hide an item from guests while keeping it in the catalog.)
+      const ok = await storage.deleteAddOn(String(req.params.id));
+      if (!ok) throw httpError(404, "Add-on not found.");
+      res.json({ ok: true });
     } catch (e) {
       next(e);
     }

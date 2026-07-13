@@ -318,6 +318,7 @@ export type CreateAddOnFields = {
   priceType: "per_item" | "flat";
   imageUrl?: string | null;
   quantityAvailable?: number | null;
+  category?: import("./booking-data").AddOnCategory | null;
   active?: boolean;
 };
 

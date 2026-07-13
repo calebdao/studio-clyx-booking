@@ -13,6 +13,13 @@ export type PaymentMethod = "zelle" | "card";
 
 export type AddOnPriceType = "per_item" | "flat";
 
+export type AddOnCategory =
+  | "furniture"
+  | "grip"
+  | "lighting"
+  | "expendables"
+  | "computers";
+
 export interface AddOnCatalogItem {
   id: string;
   name: string;
@@ -21,6 +28,7 @@ export interface AddOnCatalogItem {
   priceType: AddOnPriceType;
   imageUrl?: string | null;
   quantityAvailable?: number | null;
+  category?: AddOnCategory | null;
   active: boolean;
   sortOrder?: number;
 }

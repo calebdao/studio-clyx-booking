@@ -31,6 +31,8 @@ import {
 import {
   BOOKING_INSTRUCTION_KEYS,
   BOOKING_INSTRUCTION_LABELS,
+  ADDON_CATEGORIES,
+  ADDON_CATEGORY_LABELS,
 } from "@shared/schema";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -1023,6 +1025,15 @@ function AddOnsManager() {
                   </p>
                 )}
                 <div className="mt-1 flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
+                  {item.category ? (
+                    <span className="px-1.5 py-0.5 rounded-sm border border-card-border">
+                      {ADDON_CATEGORY_LABELS[item.category]}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded-sm border border-card-border/60 text-muted-foreground/70">
+                      Uncategorized
+                    </span>
+                  )}
                   {item.quantityAvailable != null && <span>qty {item.quantityAvailable}</span>}
                   <span
                     className={cn(
@@ -1123,6 +1134,7 @@ function AddOnEditor({
   const [quantityAvailable, setQuantityAvailable] = useState<string>(
     item?.quantityAvailable != null ? String(item.quantityAvailable) : ""
   );
+  const [category, setCategory] = useState<string>(item?.category ?? "");
   const [active, setActive] = useState(item?.active ?? true);
 
   const priceNum = parseFloat(price);
@@ -1139,6 +1151,7 @@ function AddOnEditor({
       priceType,
       imageUrl: imageUrl.trim() || null,
       quantityAvailable: qtyNum,
+      category: (category || null) as CreateAddOnFields["category"],
       active,
     });
   }
@@ -1225,6 +1238,25 @@ function AddOnEditor({
                 <span>{active ? "Active" : "Inactive"}</span>
               </label>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">
+              Category <span className="text-muted-foreground text-[10px]">shown as a tab on the booking page</span>
+            </Label>
+            <Select value={category || "none"} onValueChange={(v) => setCategory(v === "none" ? "" : v)}>
+              <SelectTrigger data-testid="select-addon-category">
+                <SelectValue placeholder="Uncategorized" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Uncategorized</SelectItem>
+                {ADDON_CATEGORIES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {ADDON_CATEGORY_LABELS[c]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-1.5">

@@ -59,12 +59,32 @@ export const addOnCatalog = sqliteTable("addon_catalog", {
   priceType: text("price_type").notNull().default("per_item"), // per_item | flat
   imageUrl: text("image_url"),
   quantityAvailable: integer("quantity_available"), // null = unspecified
+  category: text("category"), // furniture | grip | lighting | expendables | computers | null
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: integer("created_at").notNull(),
 });
 
 export type AddOnCatalogRow = typeof addOnCatalog.$inferSelect;
+
+// Add-on categories (shown as tabs on the booking page).
+export const ADDON_CATEGORIES = [
+  "furniture",
+  "grip",
+  "lighting",
+  "expendables",
+  "computers",
+] as const;
+export type AddOnCategory = (typeof ADDON_CATEGORIES)[number];
+export const ADDON_CATEGORY_LABELS: Record<AddOnCategory, string> = {
+  furniture: "Furniture",
+  grip: "Grip",
+  lighting: "Lighting",
+  expendables: "Expendables",
+  computers: "Computers",
+};
+// Fallback bucket for items with no category set yet.
+export const ADDON_CATEGORY_UNCATEGORIZED = "other";
 
 export const addOnDtoSchema = z.object({
   id: z.string(),
@@ -74,6 +94,7 @@ export const addOnDtoSchema = z.object({
   priceType: z.enum(["per_item", "flat"]),
   imageUrl: z.string().nullable().optional(),
   quantityAvailable: z.number().nullable().optional(),
+  category: z.enum(ADDON_CATEGORIES).nullable().optional(),
   active: z.boolean(),
   sortOrder: z.number().optional(),
 });
@@ -86,6 +107,7 @@ export const createAddOnSchema = z.object({
   priceType: z.enum(["per_item", "flat"]).default("per_item"),
   imageUrl: z.string().trim().url().optional().nullable().or(z.literal("")),
   quantityAvailable: z.number().int().min(0).optional().nullable(),
+  category: z.enum(ADDON_CATEGORIES).optional().nullable(),
   active: z.boolean().default(true),
 });
 export type CreateAddOnInput = z.infer<typeof createAddOnSchema>;

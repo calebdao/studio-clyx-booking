@@ -204,6 +204,7 @@ function ensureColumn(table: string, name: string, ddl: string) {
   }
 }
 ensureColumn("bookings", "promo_code", "promo_code TEXT");
+ensureColumn("addon_catalog", "category", "category TEXT");
 ensureColumn("agent_conversations", "inquiry_details", "inquiry_details TEXT");
 ensureColumn("agent_drafts", "needs_human", "needs_human INTEGER NOT NULL DEFAULT 0");
 ensureColumn("agent_drafts", "auto_sent", "auto_sent INTEGER NOT NULL DEFAULT 0");
@@ -306,6 +307,7 @@ function rowToAddOnDto(r: AddOnCatalogRow): AddOnDto {
     priceType: r.priceType as AddOnDto["priceType"],
     imageUrl: r.imageUrl ?? undefined,
     quantityAvailable: r.quantityAvailable ?? undefined,
+    category: (r.category as AddOnDto["category"]) ?? undefined,
     active: Boolean(r.active),
     sortOrder: r.sortOrder ?? 0,
   };
@@ -1024,6 +1026,7 @@ export class DatabaseStorage implements IStorage {
         input.quantityAvailable === null
           ? null
           : Number(input.quantityAvailable),
+      category: input.category ?? null,
       active: input.active ?? true,
       sortOrder: 0,
       createdAt: Date.now(),
@@ -1050,6 +1053,7 @@ export class DatabaseStorage implements IStorage {
     if (patch.quantityAvailable !== undefined)
       set.quantityAvailable =
         patch.quantityAvailable === null ? null : Number(patch.quantityAvailable);
+    if (patch.category !== undefined) set.category = patch.category ?? null;
     if (patch.active !== undefined) set.active = patch.active;
     if (Object.keys(set).length > 0) {
       db.update(addOnCatalog).set(set).where(eq(addOnCatalog.id, id)).run();
@@ -1078,8 +1082,9 @@ export class DatabaseStorage implements IStorage {
     const count = db.select().from(addOnCatalog).all().length;
     if (count > 0) return 0;
     const seeds: Array<
-      Omit<AddOnCatalogRow, "id" | "createdAt" | "sortOrder"> & {
+      Omit<AddOnCatalogRow, "id" | "createdAt" | "sortOrder" | "category"> & {
         sortOrder?: number;
+        category?: string | null;
       }
     > = [
       {
@@ -1091,6 +1096,7 @@ export class DatabaseStorage implements IStorage {
           "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/q5dbynn5xqpteuvmxydx",
         quantityAvailable: null,
         active: true,
+        category: "furniture",
       },
       {
         name: "Cream Boucle Armchair",
@@ -1101,6 +1107,7 @@ export class DatabaseStorage implements IStorage {
           "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/apcptls2emecnattppbg",
         quantityAvailable: null,
         active: true,
+        category: "furniture",
       },
       {
         name: "Herman Miller Eames Molded Plywood DCM",
@@ -1111,6 +1118,7 @@ export class DatabaseStorage implements IStorage {
           "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/jul9mh7vvapt1lzfk3pz",
         quantityAvailable: null,
         active: true,
+        category: "furniture",
       },
       {
         name: "Mario Botta La Quinta Chair",
@@ -1121,6 +1129,7 @@ export class DatabaseStorage implements IStorage {
           "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/dxsfivlbjmhyigs0p8eh",
         quantityAvailable: null,
         active: true,
+        category: "furniture",
       },
       {
         name: "Stools",
@@ -1131,6 +1140,7 @@ export class DatabaseStorage implements IStorage {
           "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/qcpcfonpxu0w7xa4nnvr",
         quantityAvailable: null,
         active: true,
+        category: "furniture",
       },
       {
         name: "Courbe Green Ceramic Table Lamp with Rattan Shade",
@@ -1141,6 +1151,7 @@ export class DatabaseStorage implements IStorage {
           "https://img.peerspace.com/image/upload/f_auto,q_auto,dpr_auto,w_96/k9bkfdbxdsf7tcage5id",
         quantityAvailable: null,
         active: true,
+        category: "lighting",
       },
     ];
     let inserted = 0;
@@ -1154,6 +1165,7 @@ export class DatabaseStorage implements IStorage {
         priceType: s.priceType,
         imageUrl: s.imageUrl ?? null,
         quantityAvailable: s.quantityAvailable ?? null,
+        category: s.category ?? null,
         active: s.active,
         sortOrder: i,
         createdAt: Date.now(),

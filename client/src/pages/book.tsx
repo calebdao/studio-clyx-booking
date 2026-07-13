@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { evaluatePromo, promoIsActive, PROMO_CODE } from "@shared/schema";
+import {
+  evaluatePromo,
+  promoIsActive,
+  PROMO_CODE,
+  ADDON_CATEGORIES,
+  ADDON_CATEGORY_LABELS,
+} from "@shared/schema";
 import {
   ACTIVITIES,
   ActivityId,
@@ -78,6 +84,7 @@ export default function BookPage() {
   const [alcohol, setAlcohol] = useState<boolean>(false);
   // selected add-ons keyed by catalog id → quantity
   const [addonQty, setAddonQty] = useState<Record<string, number>>({});
+  const [addonCategory, setAddonCategory] = useState<string>("all");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("zelle");
   const [promoOpen, setPromoOpen] = useState(false);
   const [promoInput, setPromoInput] = useState("");
@@ -531,8 +538,51 @@ export default function BookPage() {
             ) : addOnCatalog.length === 0 ? (
               <div className="text-xs text-muted-foreground">No add-ons available right now.</div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {addOnCatalog.map((item) => {
+              <>
+                {/* Category tabs — only show categories that actually have items */}
+                {(() => {
+                  const present = ADDON_CATEGORIES.filter((c) =>
+                    addOnCatalog.some((i) => i.category === c)
+                  );
+                  const hasUncat = addOnCatalog.some((i) => !i.category);
+                  // Only render tabs if items span more than one bucket.
+                  if (present.length + (hasUncat ? 1 : 0) <= 1) return null;
+                  const tabs: { key: string; label: string }[] = [
+                    { key: "all", label: "All" },
+                    ...present.map((c) => ({ key: c, label: ADDON_CATEGORY_LABELS[c] })),
+                    ...(hasUncat ? [{ key: "other", label: "Other" }] : []),
+                  ];
+                  return (
+                    <div className="mb-3 flex flex-wrap gap-1.5">
+                      {tabs.map((t) => (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => setAddonCategory(t.key)}
+                          data-testid={`tab-addon-category-${t.key}`}
+                          className={cn(
+                            "rounded-md border px-2.5 py-1 text-xs font-medium transition",
+                            addonCategory === t.key
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-card-border bg-card text-muted-foreground hover:text-foreground"
+                          )}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {addOnCatalog
+                    .filter((item) =>
+                      addonCategory === "all"
+                        ? true
+                        : addonCategory === "other"
+                        ? !item.category
+                        : item.category === addonCategory
+                    )
+                    .map((item) => {
                   const qty = addonQty[item.id] ?? 0;
                   const selected = qty > 0;
                   return (
@@ -636,8 +686,9 @@ export default function BookPage() {
                       </div>
                     </div>
                   );
-                })}
-              </div>
+                    })}
+                </div>
+              </>
             )}
           </Section>
         </div>

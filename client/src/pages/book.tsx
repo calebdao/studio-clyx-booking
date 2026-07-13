@@ -183,6 +183,15 @@ export default function BookPage() {
       ? "Enter a valid phone number."
       : undefined;
 
+  // Summary of what's still missing, shown as a warning right by the Book now
+  // button so the guest doesn't have to scroll up to find the offending field.
+  const missingRequired: string[] = [];
+  if (!first.trim()) missingRequired.push("First name");
+  if (!last.trim()) missingRequired.push("Last name");
+  if (!emailValid) missingRequired.push(email.trim() ? "A valid email" : "Email");
+  if (!phoneValid) missingRequired.push(phone.trim() ? "A valid phone number" : "Phone number");
+  if (!guestCountValid) missingRequired.push("Guest count");
+
   function setAddonQuantity(item: AddOnCatalogItem, qty: number) {
     setAddonQty((prev) => {
       const next = { ...prev };
@@ -960,7 +969,18 @@ export default function BookPage() {
                 {createHoldPending ? "Placing hold…" : "Book now"}
                 <ArrowRight className="w-4 h-4 ml-1.5" />
               </Button>
-              {!guestValid && (
+              {attemptedBook && missingRequired.length > 0 && (
+                <div
+                  className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px] text-destructive leading-relaxed"
+                  data-testid="warning-missing-fields"
+                  role="alert"
+                >
+                  <span className="font-medium">Please complete the highlighted field
+                  {missingRequired.length > 1 ? "s" : ""} above:</span>{" "}
+                  {missingRequired.join(", ")}.
+                </div>
+              )}
+              {!attemptedBook && !guestValid && (
                 <p className="text-[11px] text-muted-foreground text-center">
                   Complete guest details to continue.
                 </p>

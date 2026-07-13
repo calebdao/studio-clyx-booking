@@ -19,7 +19,8 @@ export type AddOnCategory =
   | "lighting"
   | "expendables"
   | "computers"
-  | "production";
+  | "production"
+  | "camera-video";
 
 export interface AddOnCatalogItem {
   id: string;

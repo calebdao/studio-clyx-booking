@@ -40,7 +40,7 @@ import type {
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import {
   isCalendarLiveForSpace,
   listEventsForSpace,
@@ -1384,9 +1384,18 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(agentDrafts).where(eq(agentDrafts.id, id)).get();
   }
 
-  async listAgentConversations(): Promise<AgentConversationDto[]> {
-    const convos = db.select().from(agentConversations).all();
-    convos.sort((a, b) => b.updatedAt - a.updatedAt);
+  // Cap how many conversations the admin Inbox loads at once. This endpoint is
+  // re-polled every 30s while the Inbox is open and pulls each conversation's
+  // full messages + drafts, so without a bound the memory grows with the whole
+  // Peerspace history — a prime OOM contributor. 150 recent threads is plenty
+  // for an inbox; older ones stay in the DB.
+  async listAgentConversations(limit = 150): Promise<AgentConversationDto[]> {
+    const convos = db
+      .select()
+      .from(agentConversations)
+      .orderBy(desc(agentConversations.updatedAt))
+      .limit(limit)
+      .all();
     return convos.map((c) => {
       const messages = db
         .select()

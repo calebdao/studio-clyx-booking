@@ -1339,14 +1339,33 @@ export async function registerRoutes(
 
   // ----- Integration status (admin callout) -----
   app.get("/api/integrations/status", (_req, res) => {
+    const m = process.memoryUsage();
+    const mb = (n: number) => Math.round(n / 1024 / 1024);
     res.json({
       ...integrationsStatus(),
       stripe: stripeStatus(),
       agent: agentStatus(),
       gmail: gmailStatus(),
       gmailInbound: gmailInboundStatus(),
+      memory: {
+        rssMb: mb(m.rss), // total process memory (what Render limits)
+        heapUsedMb: mb(m.heapUsed),
+        heapTotalMb: mb(m.heapTotal),
+        externalMb: mb(m.external),
+        uptimeMin: Math.round(process.uptime() / 60),
+      },
     });
   });
+
+  // Log memory every 2 min so Render logs show the trend and catch the spike
+  // before an OOM restart. Helps pin down what's growing.
+  setInterval(() => {
+    const m = process.memoryUsage();
+    const mb = (n: number) => Math.round(n / 1024 / 1024);
+    console.log(
+      `[mem] rss=${mb(m.rss)}MB heapUsed=${mb(m.heapUsed)}MB heapTotal=${mb(m.heapTotal)}MB external=${mb(m.external)}MB uptime=${Math.round(process.uptime() / 60)}min`
+    );
+  }, 2 * 60 * 1000).unref();
 
   return httpServer;
 }

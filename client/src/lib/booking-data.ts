@@ -20,7 +20,8 @@ export type AddOnCategory =
   | "expendables"
   | "computers"
   | "production"
-  | "camera-video";
+  | "camera-video"
+  | "sound";
 
 export interface AddOnCatalogItem {
   id: string;

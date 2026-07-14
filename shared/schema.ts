@@ -76,6 +76,7 @@ export const ADDON_CATEGORIES = [
   "computers",
   "production",
   "camera-video",
+  "sound",
 ] as const;
 export type AddOnCategory = (typeof ADDON_CATEGORIES)[number];
 export const ADDON_CATEGORY_LABELS: Record<AddOnCategory, string> = {
@@ -86,6 +87,7 @@ export const ADDON_CATEGORY_LABELS: Record<AddOnCategory, string> = {
   computers: "Computers",
   production: "Production",
   "camera-video": "Camera + Video Accessories",
+  sound: "Sound",
 };
 // Fallback bucket for items with no category set yet.
 export const ADDON_CATEGORY_UNCATEGORIZED = "other";

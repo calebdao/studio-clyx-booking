@@ -1,5 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
+import v8 from "node:v8";
 import { storage } from "./storage";
 import {
   createHoldSchema,
@@ -1341,6 +1342,15 @@ export async function registerRoutes(
   app.get("/api/integrations/status", (_req, res) => {
     const m = process.memoryUsage();
     const mb = (n: number) => Math.round(n / 1024 / 1024);
+    // heap_size_limit reflects --max-old-space-size, so it confirms whether the
+    // NODE_OPTIONS heap cap actually took effect (~400 => 384 cap applied;
+    // ~2000+ => not applied / default).
+    let heapLimitMb = 0;
+    try {
+      heapLimitMb = mb(v8.getHeapStatistics().heap_size_limit);
+    } catch {
+      /* ignore */
+    }
     res.json({
       ...integrationsStatus(),
       stripe: stripeStatus(),
@@ -1352,6 +1362,7 @@ export async function registerRoutes(
         heapUsedMb: mb(m.heapUsed),
         heapTotalMb: mb(m.heapTotal),
         externalMb: mb(m.external),
+        heapLimitMb, // ~400 confirms --max-old-space-size=384 is active
         uptimeMin: Math.round(process.uptime() / 60),
       },
     });

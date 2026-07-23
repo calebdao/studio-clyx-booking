@@ -546,6 +546,10 @@ export function fmtTime(d: Date): string {
 export function fmtTime12(d: Date): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
 }
+// Compact on-the-hour label for the scheduler rail, e.g. "9 AM", "12 PM", "11 PM"
+export function fmtHour12(d: Date): string {
+  return d.toLocaleTimeString("en-US", { hour: "numeric", hour12: true });
+}
 export function fmtDay(d: Date): string {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }

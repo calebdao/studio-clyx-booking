@@ -8,7 +8,8 @@ import {
   bookingsToOccupiedSlots,
   daySlots,
   fmtDay,
-  fmtTime,
+  fmtHour12,
+  fmtTime12,
   MIN_DURATION_HOURS,
   MIN_LEAD_HOURS,
   SLOT_MINUTES,
@@ -325,7 +326,7 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                     isHourMark && "border-t border-card-border"
                   )}
                 >
-                  {labelSlot ? fmtTime(slot) : ""}
+                  {labelSlot ? fmtHour12(slot) : ""}
                 </div>
                 {/* 7 day columns */}
                 {days.map((d, dayIdx) => {
@@ -367,9 +368,9 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                       data-testid={`slot-${space.id}-${slotDate.toISOString()}`}
                       title={
                         statusLabel ||
-                        `${fmtTime(slotDate)} · ${slotDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                        `${fmtTime12(slotDate)} · ${slotDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
                       }
-                      aria-label={`${fmtTime(slotDate)} on ${slotDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}${statusLabel ? `, ${statusLabel}` : ""}`}
+                      aria-label={`${fmtTime12(slotDate)} on ${slotDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}${statusLabel ? `, ${statusLabel}` : ""}`}
                       className={cn(
                         "slot-cell relative h-7 border-l border-card-border text-left",
                         isFirstOfHour && "border-t border-card-border",

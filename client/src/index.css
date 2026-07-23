@@ -258,4 +258,21 @@
                 color 120ms cubic-bezier(0.16, 1, 0.3, 1),
                 border-color 120ms cubic-bezier(0.16, 1, 0.3, 1);
   }
+
+  /* Blocked/unavailable slots: diagonal hatch over the whole block.
+     Uses currentColor so it tints with the cell's status color. */
+  .slot-blocked {
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0,
+      transparent 4px,
+      color-mix(in srgb, currentColor 20%, transparent) 4px,
+      color-mix(in srgb, currentColor 20%, transparent) 5px
+    );
+  }
+
+  /* Night hours (~8 PM–6 AM): subtle cool tint on available cells. */
+  .slot-night {
+    background-color: hsl(230 45% 50% / 0.06);
+  }
 }

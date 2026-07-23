@@ -346,6 +346,8 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                   const selected = inSelection(slotDate);
                   const isStart = start && slotDate.getTime() === start.getTime();
                   const isFirstOfHour = slot.getMinutes() === 0;
+                  const hour = slot.getHours();
+                  const isNight = hour >= 20 || hour < 6;
 
                   let statusLabel = "";
                   if (occupied) {
@@ -374,9 +376,12 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                       className={cn(
                         "slot-cell relative h-7 border-l border-card-border text-left",
                         isFirstOfHour && "border-t border-card-border",
+                        // night hours: subtle cool tint on available cells only
+                        interactive && isNight && "slot-night",
                         // base
                         interactive && "hover:bg-primary/10 cursor-pointer",
-                        // disabled / occupied
+                        // disabled / occupied — diagonal hatch marks the whole block as blocked
+                        occupied && "slot-blocked",
                         occupied?.status === "confirmed" && "bg-foreground/[0.08] text-muted-foreground cursor-not-allowed",
                         occupied?.status === "held" && "bg-amber-500/10 text-muted-foreground cursor-not-allowed",
                         occupied?.status === "pending" && "bg-amber-500/15 text-muted-foreground cursor-not-allowed",
@@ -413,9 +418,10 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 border-t border-card-border bg-background/30 text-xs">
         <LegendSwatch className="bg-card border" label="Available" />
         <LegendSwatch className="bg-primary" label="Your selection" />
-        <LegendSwatch className="bg-foreground/[0.08]" label="Booked" />
-        <LegendSwatch className="bg-amber-500/15" label="Held / pending" />
+        <LegendSwatch className="slot-blocked bg-foreground/[0.08] text-muted-foreground" label="Booked" />
+        <LegendSwatch className="slot-blocked bg-amber-500/15 text-muted-foreground" label="Held / pending" />
         <LegendSwatch className="bg-muted/30" label="Outside window" />
+        <LegendSwatch className="slot-night border" label="Night hours" />
         <span className="ml-auto text-muted-foreground flex items-center gap-1.5">
           <Clock className="w-3 h-3" />
           <span className="font-mono">

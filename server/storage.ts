@@ -16,7 +16,7 @@ import {
   GUEST_MAX,
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
-  promoDiscountForBase,
+  applyPromo,
   evaluatePromo,
 } from "@shared/schema";
 import type {
@@ -417,7 +417,13 @@ function computeServerBaseTotal(args: {
     (s, a) => s + (a.lineTotal ?? 0),
     0
   );
-  const promoDiscount = promoDiscountForBase(base, args.promoCode ?? null, args.start);
+  const promoDiscount = applyPromo({
+    base,
+    hours,
+    activityId: args.activityId,
+    rawCode: args.promoCode ?? null,
+    startIso: args.start,
+  }).discount;
   return (
     Math.round(
       (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount) * 100
@@ -679,7 +685,7 @@ export class DatabaseStorage implements IStorage {
     const paymentMethod = (input.paymentMethod ?? "zelle") as "zelle" | "card";
     // Validate the promo server-side; only store it when it actually applies
     // (correct code AND session date inside the window).
-    const promo = evaluatePromo(input.promoCode ?? null, input.start);
+    const promo = evaluatePromo(input.promoCode ?? null, input.start, input.activityId);
     const promoCode = promo.applied ? promo.code : null;
     const baseTotal = computeServerBaseTotal({
       activityId: input.activityId,

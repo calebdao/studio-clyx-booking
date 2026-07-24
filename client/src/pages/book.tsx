@@ -154,7 +154,7 @@ export default function BookPage() {
   const promoEval = useMemo(
     () =>
       appliedPromo && selection
-        ? evaluatePromo(appliedPromo, selection.start.toISOString())
+        ? evaluatePromo(appliedPromo, selection.start.toISOString(), activityId)
         : null,
     [appliedPromo, selection]
   );
@@ -928,7 +928,7 @@ export default function BookPage() {
                   )}
                   {appliedPromo && !selection && (
                     <p className="text-[11px] text-muted-foreground">
-                      Pick your session dates — the discount applies to sessions Jun 29–Jul 5, 2026.
+                      Pick your session dates to see the discount applied.
                     </p>
                   )}
                 </div>

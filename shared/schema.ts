@@ -163,11 +163,43 @@ export function guestSurchargeRate(count: number): number {
 }
 
 // ----- Promo codes -----
-// Independence Day Week: 15% off the hourly ROOM RATE (base only — not the guest
-// surcharge, fees, or add-ons) for any session whose NY-local date falls inside
-// the window. Eligibility is purely the session date; the code is redeemable any
-// time up to the end of the window (a session can't be booked after it starts).
-// Single source of truth shared by client preview and server-authoritative math.
+// The PROMOS table is the single source of truth, shared by the client preview,
+// the server-authoritative math, and the confirmation email. Every promo
+// discounts the hourly ROOM RATE only (base — never the guest surcharge, fees,
+// or add-ons). A promo is either `percent` off or a `flatRate` target hourly
+// rate, may be limited to certain `activityIds`, and may be gated to an NY-local
+// session-date window (`sessionStart`/`sessionEnd`, both inclusive). To add or
+// change a code, edit this list — nothing else needs to change.
+export interface PromoRule {
+  code: string; // what the guest types (matched case-insensitively)
+  label: string; // human-readable name for messages/receipts
+  percent?: number; // percent off the base room rate
+  flatRate?: number; // OR: set the eligible activity's hourly rate to this ($/hr)
+  activityIds?: string[]; // limit to these activities; omit = any activity
+  sessionStart?: string; // NY date (YYYY-MM-DD) inclusive lower bound; omit = none
+  sessionEnd?: string; // NY date inclusive upper bound; omit = never expires
+}
+
+export const PROMOS: PromoRule[] = [
+  {
+    code: "JULY4WEEK",
+    label: "Independence Day Week",
+    percent: 15,
+    sessionStart: "2026-06-29",
+    sessionEnd: "2026-07-05",
+  },
+  {
+    // $50/hr production rate (base is $60/hr). Production bookings only; the
+    // guest surcharge and any fees still apply on top. No expiration.
+    code: "PROD50",
+    label: "Production $50/hr",
+    flatRate: 50,
+    activityIds: ["production"],
+  },
+];
+
+// The Independence Day code still drives the booking-page banner/autofill; these
+// aliases keep that UI unchanged. All pricing math flows through the PROMOS table.
 export const PROMO_CODE = "JULY4WEEK";
 export const PROMO_PERCENT = 15;
 export const PROMO_LABEL = "Independence Day Week";
@@ -197,50 +229,115 @@ export function promoIsActive(now: Date = new Date()): boolean {
 export interface PromoEvaluation {
   applied: boolean;
   code: string; // normalized matched code, else ""
-  percent: number; // 0 when not applied
+  label: string; // promo label when applied, else ""
+  detail: string; // short receipt detail, e.g. "−15% room rate" or "$50/hr room rate"
   reason: string; // human-readable success/why-not message
 }
 
-// Evaluate a typed promo code against a session start. Case-insensitive.
+// Pretty "Jun 29, 2026" for a YYYY-MM-DD promo-window bound (noon avoids TZ edges).
+function fmtPromoDate(day: string): string {
+  const d = new Date(`${day}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return day;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(d);
+}
+
+function activityName(id: string): string {
+  return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+function findPromo(rawCode: string | null | undefined): PromoRule | null {
+  const code = (rawCode ?? "").trim().toUpperCase();
+  if (!code) return null;
+  return PROMOS.find((p) => p.code.toUpperCase() === code) ?? null;
+}
+
+function promoDetail(promo: PromoRule): string {
+  if (typeof promo.percent === "number") return `−${promo.percent}% room rate`;
+  if (typeof promo.flatRate === "number") return `$${promo.flatRate}/hr room rate`;
+  return "";
+}
+
+// Evaluate a typed promo code against a session start (and activity, when the
+// promo is activity-restricted). Case-insensitive. Pure — no money math.
 export function evaluatePromo(
   rawCode: string | null | undefined,
-  startIso: string
+  startIso: string,
+  activityId?: string | null
 ): PromoEvaluation {
+  const none = (reason = ""): PromoEvaluation => ({
+    applied: false,
+    code: "",
+    label: "",
+    detail: "",
+    reason,
+  });
   const code = (rawCode ?? "").trim().toUpperCase();
-  if (!code) return { applied: false, code: "", percent: 0, reason: "" };
-  if (code !== PROMO_CODE) {
-    return { applied: false, code: "", percent: 0, reason: "That promo code isn’t valid." };
-  }
+  if (!code) return none("");
+  const promo = findPromo(code);
+  if (!promo) return none("That promo code isn’t valid.");
   const day = nyDateStr(startIso);
-  if (!day) {
-    return { applied: false, code: "", percent: 0, reason: "Couldn’t read the booking date." };
+  if (!day) return none("Couldn’t read the booking date.");
+  if (
+    (promo.sessionStart && day < promo.sessionStart) ||
+    (promo.sessionEnd && day > promo.sessionEnd)
+  ) {
+    const range =
+      promo.sessionStart && promo.sessionEnd
+        ? `${fmtPromoDate(promo.sessionStart)}–${fmtPromoDate(promo.sessionEnd)}`
+        : promo.sessionStart
+        ? `on or after ${fmtPromoDate(promo.sessionStart)}`
+        : `on or before ${fmtPromoDate(promo.sessionEnd!)}`;
+    return none(`${promo.label}: applies only to sessions ${range}.`);
   }
-  if (day < PROMO_SESSION_START || day > PROMO_SESSION_END) {
-    return {
-      applied: false,
-      code: "",
-      percent: 0,
-      reason: `${PROMO_LABEL}: 15% off applies only to sessions Jun 29–Jul 5, 2026.`,
-    };
+  if (
+    promo.activityIds &&
+    (activityId == null || !promo.activityIds.includes(activityId))
+  ) {
+    const names = promo.activityIds.map(activityName).join(" or ");
+    return none(`${promo.label}: applies to ${names} bookings only.`);
   }
   return {
     applied: true,
-    code: PROMO_CODE,
-    percent: PROMO_PERCENT,
-    reason: `${PROMO_LABEL} — 15% off the room rate applied.`,
+    code: promo.code,
+    label: promo.label,
+    detail: promoDetail(promo),
+    reason: `${promo.label} applied.`,
   };
 }
 
-// The dollar discount for a given base (hourly room charge), rounded to cents.
-// Used everywhere the promo touches money so client/server never diverge.
-export function promoDiscountForBase(
-  base: number,
-  rawCode: string | null | undefined,
-  startIso: string
-): number {
-  const e = evaluatePromo(rawCode, startIso);
-  if (!e.applied) return 0;
-  return Math.round(base * e.percent) / 100;
+export interface PromoResult extends PromoEvaluation {
+  discount: number; // dollar discount off the base room rate, rounded to cents
+}
+
+// Evaluate + compute the dollar discount in one call. `base` is the room charge
+// (activity rate × hours); `hours` is needed for flat-rate promos. This is the
+// single money entry point shared by client preview and server math, so the two
+// never diverge. Returns discount 0 (and applied=false) when the code doesn't
+// apply or wouldn't actually lower the price.
+export function applyPromo(args: {
+  base: number;
+  hours: number;
+  activityId?: string | null;
+  rawCode: string | null | undefined;
+  startIso: string;
+}): PromoResult {
+  const e = evaluatePromo(args.rawCode, args.startIso, args.activityId);
+  if (!e.applied) return { ...e, discount: 0 };
+  const promo = findPromo(e.code)!;
+  let discount = 0;
+  if (typeof promo.percent === "number") {
+    discount = Math.round(args.base * promo.percent) / 100;
+  } else if (typeof promo.flatRate === "number") {
+    // Set the eligible activity's hourly rate to flatRate; the discount is the
+    // gap from the original base. Never negative (a promo can't upcharge).
+    const target = Math.round(promo.flatRate * args.hours * 100) / 100;
+    discount = Math.max(0, Math.round((args.base - target) * 100) / 100);
+  }
+  return { ...e, applied: discount > 0, discount };
 }
 
 // Public Booking shape used by the client API (matches existing client booking-data.ts shape)

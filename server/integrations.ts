@@ -11,8 +11,7 @@ import {
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
   guestSurchargeRate,
-  promoDiscountForBase,
-  PROMO_PERCENT,
+  applyPromo,
 } from "@shared/schema";
 import {
   SPACE_CALENDAR_ENV,
@@ -357,11 +356,14 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
   const addons: SelectedAddOn[] = booking.addons ?? [];
   const addonsTotal = round2(addons.reduce((s, a) => s + (a.lineTotal ?? 0), 0));
   // Promo: discount the hourly room rate (base) only.
-  const promoDiscount = promoDiscountForBase(
+  const promo = applyPromo({
     base,
-    booking.promoCode ?? null,
-    booking.start
-  );
+    hours: durationHours,
+    activityId: booking.activityId,
+    rawCode: booking.promoCode ?? null,
+    startIso: booking.start,
+  });
+  const promoDiscount = promo.discount;
   const subtotal = round2(
     base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount
   );
@@ -403,8 +405,8 @@ export function computeBookingPricing(booking: BookingDto): PriceSummary {
   }
   if (promoDiscount > 0) {
     lines.push({
-      label: `Promo ${booking.promoCode}`,
-      detail: `−${PROMO_PERCENT}% room rate`,
+      label: `Promo ${promo.code}`,
+      detail: promo.detail,
       amount: -promoDiscount,
     });
   }

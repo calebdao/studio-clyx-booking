@@ -1,7 +1,7 @@
 // Studio Clyx — booking domain types, constants, and seed data.
 // All data is in-memory for the Phase 1 prototype. Future: Supabase + Google Calendar.
 
-import { promoDiscountForBase, PROMO_CODE, PROMO_PERCENT } from "@shared/schema";
+import { applyPromo } from "@shared/schema";
 
 export type SpaceId = "studio-1" | "studio-2" | "studio-3" | "lincoln-apartment";
 
@@ -468,9 +468,12 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
     addons.reduce((sum, a) => sum + (a.lineTotal ?? 0), 0)
   );
   // Promo: discount the hourly room rate (base) only, when a valid code is
-  // entered AND the session date falls inside the promo window.
-  const promoDiscount =
-    promoCode && startIso ? promoDiscountForBase(base, promoCode, startIso) : 0;
+  // entered AND it applies to this session (date window + activity).
+  const promo =
+    promoCode && startIso
+      ? applyPromo({ base, hours, activityId, rawCode: promoCode, startIso })
+      : null;
+  const promoDiscount = promo?.discount ?? 0;
   const promoApplied = promoDiscount > 0;
   const subtotal = round2(
     base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount
@@ -508,10 +511,10 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
       amount: a.lineTotal,
     });
   }
-  if (promoDiscount > 0) {
+  if (promo && promoDiscount > 0) {
     lines.push({
-      label: `Promo (${PROMO_CODE})`,
-      detail: `−${PROMO_PERCENT}% room rate`,
+      label: `Promo (${promo.code})`,
+      detail: promo.detail,
       amount: -promoDiscount,
     });
   }

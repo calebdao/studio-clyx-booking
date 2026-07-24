@@ -12,7 +12,7 @@ import {
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
   guestSurchargeRate,
-  promoDiscountForBase,
+  applyPromo,
   type BookingDto,
   type SelectedAddOn,
 } from "@shared/schema";
@@ -361,7 +361,13 @@ function computePreviewBaseTotal(args: {
     0
   );
   // Promo discounts the hourly room rate (base) only.
-  const promoDiscount = promoDiscountForBase(base, args.promoCode ?? null, args.start);
+  const promoDiscount = applyPromo({
+    base,
+    hours,
+    activityId: args.activityId,
+    rawCode: args.promoCode ?? null,
+    startIso: args.start,
+  }).discount;
   return (
     Math.round(
       (base + guestSurcharge + cleaningFee + alcoholFee + addonsTotal - promoDiscount) * 100

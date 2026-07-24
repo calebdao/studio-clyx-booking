@@ -71,24 +71,16 @@ function deferringToHuman(text: string): boolean {
   return ESCALATION_PHRASES.some((p) => s.includes(p));
 }
 
-// Name the bot signs Q&A replies as. Defaults to Gladys; override per-deploy.
-export function signoffName(): string {
-  return (process.env.AGENT_SIGNOFF_NAME || "Gladys").trim() || "Gladys";
-}
-
-// Force every outgoing Q&A reply to close with the configured signer. The system
-// prompt already asks for it; this is a deterministic backstop so a reply never
-// goes out signed as "Studio Clyx"/"the team" or unsigned if the model deviates.
-function enforceSignoff(reply: string, name: string): string {
+// Strip a trailing sign-off block (e.g. "Warmly,\nGladys") if the model still
+// adds one. Guests want replies that end on the answer, casual and to the point
+// — no formal closing. The system prompt asks for this; this is the backstop.
+function stripSignoff(reply: string): string {
   const text = reply.replace(/\s+$/, "");
-  // Already signed by them near the end → leave as-is.
-  if (text.slice(-60).toLowerCase().includes(name.toLowerCase())) return text;
-  // A trailing studio-name sign-off → swap it for the signer (won't touch
-  // "Studio Clyx" mentions elsewhere in the body).
-  const trailingStudio = /(the\s+)?studio\s+clyx(\s+team)?\s*$/i;
-  if (trailingStudio.test(text)) return text.replace(trailingStudio, name);
-  // No detectable sign-off → append one.
-  return `${text}\n\nWarmly,\n${name}`;
+  // A closing keyword that starts the final block (after a blank line), plus the
+  // short name line that follows. Anchored so it won't touch the reply body.
+  const closing =
+    /\n\s*\n[ \t]*(?:[-–—]\s*)?(?:warm(?:ly|est)?|best|kind(?:est)?\s+regards|cheers|thanks|thank\s+you|regards|sincerely|talk\s+soon|speak\s+soon|all\s+the\s+best|yours)\b[\s\S]{0,40}$/i;
+  return text.replace(closing, "").replace(/\s+$/, "");
 }
 
 export function agentStatus() {
@@ -286,10 +278,12 @@ function buildSystemPrompt(
     '{"confident": true|false, "reply": "<the full email body>", "missing": "<short note>"}',
     "",
     "- If the knowledge base fully covers the question: set confident=true, put a",
-    "  complete, ready-to-send plain-text email body in \"reply\" (warm, concise,",
-    `  professional; ALWAYS sign off as "${signoffName()}" (e.g. "Warmly,\\n${signoffName()}");`,
-    "  do NOT sign as \"Studio Clyx\" or \"the team\"; no placeholders like [name]), and",
-    "  set \"missing\" to \"\".",
+    "  complete, ready-to-send plain-text email body in \"reply\". Style: casual and",
+    "  friendly, like a quick note from a real person. Answer the question directly",
+    "  and keep it short — a couple of sentences is usually plenty. Do NOT open with",
+    "  filler like \"Great question!\" or \"Thanks for reaching out!\", and do NOT add a",
+    "  sign-off, closing line, or name (no \"Warmly,\", no \"Best,\", no \"Studio Clyx\").",
+    "  Just end on the answer. No placeholders like [name]. Set \"missing\" to \"\".",
     "- Otherwise: set confident=false, set \"reply\" to \"\", and in \"missing\"",
     "  briefly describe what information is needed to answer. Do NOT write a",
     "  guessed reply.",
@@ -647,8 +641,8 @@ export async function generateDraftForConversation(
   }
 
   // Confident → create the draft. Auto-send only if enabled and the reply isn't
-  // itself deferring to a human. Enforce the Gladys sign-off on the way out.
-  const replyText = enforceSignoff(structured.reply, signoffName());
+  // itself deferring to a human. Strip any stray sign-off on the way out.
+  const replyText = stripSignoff(structured.reply);
   const draft = await storage.createAgentDraft({
     conversationId,
     inboundMessageId,

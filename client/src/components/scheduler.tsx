@@ -376,8 +376,10 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                       className={cn(
                         "slot-cell relative h-7 border-l border-card-border text-left",
                         isFirstOfHour && "border-t border-card-border",
-                        // night hours: subtle cool tint on available cells only
-                        interactive && isNight && "slot-night",
+                        // night hours: subtle cool tint on available, unselected
+                        // cells. Dropped when selected so the primary highlight
+                        // (same @layer utilities) isn't shadowed by the tint.
+                        interactive && isNight && !selected && "slot-night",
                         // base
                         interactive && "hover:bg-primary/10 cursor-pointer",
                         // disabled / occupied — diagonal hatch marks the whole block as blocked

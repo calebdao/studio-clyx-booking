@@ -91,6 +91,8 @@ export default function BookPage() {
   // selected add-ons keyed by catalog id → quantity
   const [addonQty, setAddonQty] = useState<Record<string, number>>({});
   const [addonCategory, setAddonCategory] = useState<string>("all");
+  // Add-on whose full details are shown in a popup (null = closed).
+  const [addonDetails, setAddonDetails] = useState<AddOnCatalogItem | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("zelle");
   const [promoOpen, setPromoOpen] = useState(false);
   const [promoInput, setPromoInput] = useState("");
@@ -638,11 +640,14 @@ export default function BookPage() {
                   const qty = addonQty[item.id] ?? 0;
                   const selected = qty > 0;
                   return (
-                    <div
+                    <button
                       key={item.id}
+                      type="button"
+                      onClick={() => setAddonDetails(item)}
                       data-testid={`card-addon-${item.id}`}
                       className={cn(
-                        "flex gap-3 rounded-md border p-3 transition",
+                        "flex gap-3 rounded-md border p-3 text-left transition outline-none",
+                        "hover:border-primary/60 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40",
                         selected
                           ? "border-primary bg-primary/5"
                           : "border-card-border bg-card"
@@ -662,7 +667,7 @@ export default function BookPage() {
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-baseline justify-between gap-2">
-                          <div className="font-medium text-sm tracking-tight truncate">
+                          <div className="font-medium text-sm tracking-tight truncate min-w-0">
                             {item.name}
                           </div>
                           <div className="font-mono text-xs whitespace-nowrap">
@@ -677,66 +682,18 @@ export default function BookPage() {
                             {item.description}
                           </p>
                         )}
-                        <div className="mt-2 flex items-center gap-2">
-                          {item.priceType === "per_item" ? (
-                            <>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="icon"
-                                className="h-7 w-7"
-                                disabled={qty <= 0}
-                                onClick={() => setAddonQuantity(item, qty - 1)}
-                                data-testid={`button-addon-decrement-${item.id}`}
-                                aria-label={`Decrease ${item.name}`}
-                              >
-                                <Minus className="w-3 h-3" />
-                              </Button>
-                              <Input
-                                type="number"
-                                min={0}
-                                max={item.quantityAvailable ?? 99}
-                                value={qty}
-                                onChange={(e) => {
-                                  const n = parseInt(e.target.value || "0", 10);
-                                  setAddonQuantity(item, Number.isFinite(n) ? n : 0);
-                                }}
-                                className="text-center font-mono w-14 h-7 text-xs"
-                                data-testid={`input-addon-qty-${item.id}`}
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="icon"
-                                className="h-7 w-7"
-                                disabled={
-                                  item.quantityAvailable != null &&
-                                  qty >= item.quantityAvailable
-                                }
-                                onClick={() => setAddonQuantity(item, qty + 1)}
-                                data-testid={`button-addon-increment-${item.id}`}
-                                aria-label={`Increase ${item.name}`}
-                              >
-                                <Plus className="w-3 h-3" />
-                              </Button>
-                            </>
+                        <div className="mt-2 text-[11px] font-medium">
+                          {selected ? (
+                            <span className="inline-flex items-center gap-1 text-primary">
+                              <Check className="w-3 h-3" />
+                              {item.priceType === "per_item" ? `Added · ${qty}` : "Added"}
+                            </span>
                           ) : (
-                            <label className="flex items-center gap-2 text-xs cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={selected}
-                                onChange={(e) =>
-                                  setAddonQuantity(item, e.target.checked ? 1 : 0)
-                                }
-                                className="h-3.5 w-3.5 accent-primary"
-                                data-testid={`checkbox-addon-${item.id}`}
-                              />
-                              <span>{selected ? "Added" : "Add"}</span>
-                            </label>
+                            <span className="text-muted-foreground">Tap to view &amp; add</span>
                           )}
                         </div>
                       </div>
-                    </div>
+                    </button>
                   );
                     })}
                 </div>
@@ -1022,6 +979,127 @@ export default function BookPage() {
           </div>
         </aside>
       </div>
+
+      {/* Add-on details popup — full image/description + add to order.
+          Closes on click-away or the corner X. */}
+      <Dialog open={!!addonDetails} onOpenChange={(open) => !open && setAddonDetails(null)}>
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" data-testid="dialog-addon-details">
+          {addonDetails && (() => {
+            const dQty = addonQty[addonDetails.id] ?? 0;
+            const dSelected = dQty > 0;
+            const dMax = addonDetails.quantityAvailable ?? 99;
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="tracking-tight">{addonDetails.name}</DialogTitle>
+                  <DialogDescription className="font-mono text-xs">
+                    ${addonDetails.price.toFixed(2)}
+                    {addonDetails.priceType === "per_item" ? " / each" : " flat"}
+                  </DialogDescription>
+                </DialogHeader>
+                {addonDetails.imageUrl ? (
+                  <img
+                    src={addonDetails.imageUrl}
+                    alt=""
+                    className="w-full max-h-72 rounded-md object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="w-full h-40 rounded-md bg-muted flex items-center justify-center">
+                    <ShoppingBag className="w-8 h-8 text-muted-foreground" />
+                  </div>
+                )}
+                {addonDetails.description ? (
+                  <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-line">
+                    {addonDetails.description}
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">No description provided.</p>
+                )}
+                <DialogFooter className="sm:justify-between gap-3 items-center">
+                  {addonDetails.priceType === "per_item" ? (
+                    dSelected ? (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => setAddonQuantity(addonDetails, dQty - 1)}
+                          aria-label={`Decrease ${addonDetails.name}`}
+                          data-testid="button-addon-details-decrement"
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </Button>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={dMax}
+                          value={dQty}
+                          onChange={(e) => {
+                            const n = parseInt(e.target.value || "0", 10);
+                            setAddonQuantity(addonDetails, Number.isFinite(n) ? n : 0);
+                          }}
+                          className="text-center font-mono w-16 h-8 text-sm"
+                          data-testid="input-addon-details-qty"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8"
+                          disabled={dQty >= dMax}
+                          onClick={() => setAddonQuantity(addonDetails, dQty + 1)}
+                          aria-label={`Increase ${addonDetails.name}`}
+                          data-testid="button-addon-details-increment"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </Button>
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-primary ml-1">
+                          <Check className="w-3.5 h-3.5" /> Added
+                        </span>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        onClick={() => setAddonQuantity(addonDetails, 1)}
+                        data-testid="button-addon-details-add"
+                      >
+                        <Plus className="w-4 h-4 mr-1.5" /> Add to order
+                      </Button>
+                    )
+                  ) : dSelected ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setAddonQuantity(addonDetails, 0)}
+                      data-testid="button-addon-details-remove"
+                    >
+                      Remove from order
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      onClick={() => setAddonQuantity(addonDetails, 1)}
+                      data-testid="button-addon-details-add"
+                    >
+                      <Plus className="w-4 h-4 mr-1.5" /> Add to order
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setAddonDetails(null)}
+                    data-testid="button-addon-details-done"
+                  >
+                    Done
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Confirmation dialog */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>

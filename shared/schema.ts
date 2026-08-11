@@ -188,6 +188,15 @@ export const PROMOS: PromoRule[] = [
     sessionStart: "2026-06-29",
     sessionEnd: "2026-07-05",
   },
+  {
+    // $50/hr production rate (base is $60/hr). Production bookings only; the
+    // guest surcharge and any fees still apply on top. No expiration.
+    // Guests type "production50" (matched case-insensitively).
+    code: "PRODUCTION50",
+    label: "Production $50/hr",
+    flatRate: 50,
+    activityIds: ["production"],
+  },
 ];
 
 // The Independence Day code still drives the booking-page banner/autofill; these

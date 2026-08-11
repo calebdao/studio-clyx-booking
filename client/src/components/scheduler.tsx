@@ -371,8 +371,6 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                   const selected = inSelection(slotDate);
                   const isStart = start && slotDate.getTime() === start.getTime();
                   const isFirstOfHour = row.minute === 0;
-                  const hour = row.hour;
-                  const isNight = hour >= 20 || hour < 6;
 
                   let statusLabel = "";
                   if (occupied) {
@@ -401,10 +399,6 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                       className={cn(
                         "slot-cell relative h-7 border-l border-card-border text-left",
                         isFirstOfHour && "border-t border-card-border",
-                        // night hours: subtle cool tint on available, unselected
-                        // cells. Dropped when selected so the primary highlight
-                        // (same @layer utilities) isn't shadowed by the tint.
-                        interactive && isNight && !selected && "slot-night",
                         // base
                         interactive && "hover:bg-primary/10 cursor-pointer",
                         // disabled / occupied — diagonal hatch marks the whole block as blocked
@@ -448,7 +442,6 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
         <LegendSwatch className="slot-blocked bg-foreground/[0.08] text-muted-foreground" label="Booked" />
         <LegendSwatch className="slot-blocked bg-amber-500/15 text-muted-foreground" label="Held / pending" />
         <LegendSwatch className="bg-muted/30" label="Outside window" />
-        <LegendSwatch className="slot-night border" label="Night hours" />
         <span className="ml-auto text-muted-foreground flex items-center gap-1.5">
           <Clock className="w-3 h-3" />
           <span className="font-mono">

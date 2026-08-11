@@ -270,9 +270,4 @@
       color-mix(in srgb, currentColor 20%, transparent) 5px
     );
   }
-
-  /* Night hours (~8 PM–6 AM): subtle cool tint on available cells. */
-  .slot-night {
-    background-color: hsl(230 45% 50% / 0.06);
-  }
 }

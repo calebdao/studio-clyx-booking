@@ -680,6 +680,24 @@ export function bookingsToOccupiedSlots(
   return map;
 }
 
+// ----- Night-hours notice -----
+// "Night hours" for the guest-facing heads-up: any time at/after 8 PM or before
+// 6 AM, New York time. Single source of truth for the definition — change these
+// to shift what counts as a night booking.
+export const NIGHT_START_HOUR = 20; // 8 PM ET
+export const NIGHT_END_HOUR = 6; // 6 AM ET
+
+// True when any 30-minute slot of [start, end) falls within night hours (NY
+// time). Drives the non-blocking "runs into night hours" notice in the summary.
+export function bookingIncludesNightHours(start: Date, end: Date): boolean {
+  const stepMs = SLOT_MINUTES * 60 * 1000;
+  for (let t = start.getTime(); t < end.getTime(); t += stepMs) {
+    const h = nyParts(new Date(t)).hour;
+    if (h >= NIGHT_START_HOUR || h < NIGHT_END_HOUR) return true;
+  }
+  return false;
+}
+
 // Generate the slot grid for a specific day: 48 slots from 00:00 to 23:30
 export function daySlots(day: Date): Date[] {
   const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);

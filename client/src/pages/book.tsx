@@ -11,6 +11,7 @@ import {
   ActivityId,
   AddOnCatalogItem,
   Booking,
+  bookingIncludesNightHours,
   computePriceBreakdown,
   fmtDayLong,
   fmtMoney,
@@ -46,7 +47,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin, Minus, Plus, Users, Wine, ShoppingBag, CreditCard, Banknote } from "lucide-react";
+import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin, Minus, Plus, Users, Wine, ShoppingBag, CreditCard, Banknote, Moon } from "lucide-react";
 import {
   fetchStripeIntentForBooking,
   useBookings,
@@ -760,6 +761,18 @@ export default function BookPage() {
                     <div className="text-xs text-muted-foreground font-mono">
                       {hours} hr · {slots} half-hour slots
                     </div>
+                    {bookingIncludesNightHours(selection!.start, selection!.end) && (
+                      <div
+                        className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed"
+                        data-testid="notice-night-booking"
+                      >
+                        <Moon className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600" aria-hidden />
+                        <span>
+                          Heads up — this booking runs into night hours (after 8 PM ET).
+                          Just double-check the time is right before you continue.
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ) : isChoosingEnd ? (
                   <div className="space-y-1">

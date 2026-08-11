@@ -7,6 +7,9 @@ import {
   fmtDay,
   fmtMoney,
   fmtTime12,
+  NY_TZ,
+  nyParts,
+  nyWallToUtc,
   SPACES,
   spaceById,
   activityById,
@@ -775,19 +778,25 @@ function BookingRow({
   );
 }
 
+// Bucket key for a booking instant by its New York calendar day, so the
+// overview groups bookings the same way the studio (and Google Calendar) sees
+// them — not by the admin browser's local day.
+function nyDayKey(d: Date): string {
+  const p = nyParts(d);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
 function CalendarPreview({ bookings }: { bookings: Booking[] }) {
-  // Show next 14 days: rows = days, columns = spaces; cells show count + bars
+  // Show next 14 NY days: rows = days, columns = spaces; cells show count + bars
   const today = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
+    const p = nyParts(new Date());
+    return nyWallToUtc(p.year, p.month - 1, p.day, 0, 0);
   }, []);
   const days: Date[] = useMemo(() => {
+    const p = nyParts(today);
     const arr: Date[] = [];
     for (let i = 0; i < 14; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() + i);
-      arr.push(d);
+      arr.push(nyWallToUtc(p.year, p.month - 1, p.day + i, 0, 0));
     }
     return arr;
   }, [today]);
@@ -795,8 +804,7 @@ function CalendarPreview({ bookings }: { bookings: Booking[] }) {
   const bookingsByDayAndSpace = useMemo(() => {
     const m = new Map<string, Booking[]>();
     for (const b of bookings) {
-      const start = new Date(b.start);
-      const key = `${start.toDateString()}|${b.spaceId}`;
+      const key = `${nyDayKey(new Date(b.start))}|${b.spaceId}`;
       const arr = m.get(key) ?? [];
       arr.push(b);
       m.set(key, arr);
@@ -826,9 +834,9 @@ function CalendarPreview({ bookings }: { bookings: Booking[] }) {
               key={`h-${d.toISOString()}`}
               className="border-b border-l border-card-border bg-background/40 px-1 py-2 text-center"
             >
-              <div className="text-eyebrow">{d.toLocaleDateString("en-US", { weekday: "short" })}</div>
+              <div className="text-eyebrow">{d.toLocaleDateString("en-US", { timeZone: NY_TZ, weekday: "short" })}</div>
               <div className="text-xs font-mono tabular-nums">
-                {d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
+                {d.toLocaleDateString("en-US", { timeZone: NY_TZ, month: "numeric", day: "numeric" })}
               </div>
             </div>
           ))}
@@ -850,7 +858,7 @@ function CalendarPreview({ bookings }: { bookings: Booking[] }) {
                 </div>
               </div>
               {days.map((d) => {
-                const list = bookingsByDayAndSpace.get(`${d.toDateString()}|${space.id}`) ?? [];
+                const list = bookingsByDayAndSpace.get(`${nyDayKey(d)}|${space.id}`) ?? [];
                 const total = list.reduce((acc, b) => {
                   const slots = Math.round(
                     (new Date(b.end).getTime() - new Date(b.start).getTime()) / (30 * 60 * 1000)

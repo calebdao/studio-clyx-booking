@@ -6,12 +6,13 @@ import {
   Booking,
   BOOKING_WINDOW_MONTHS,
   bookingsToOccupiedSlots,
-  daySlots,
   fmtDay,
-  fmtHour12,
   fmtTime12,
   MIN_DURATION_HOURS,
   MIN_LEAD_HOURS,
+  NY_TZ,
+  nyParts,
+  nyWallToUtc,
   SLOT_MINUTES,
   Space,
 } from "@/lib/booking-data";
@@ -31,6 +32,14 @@ type Phase = "empty" | "choosing-end" | "complete";
 
 const DAYS_VISIBLE = 7;
 
+// "9 AM", "12 PM", "11 PM" — the hour-rail label. `hour` is a NY wall-clock hour
+// (0–23), so no timezone conversion is needed here.
+function hourLabel(hour: number): string {
+  const period = hour < 12 ? "AM" : "PM";
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${h12} ${period}`;
+}
+
 export function Scheduler({ space, activity, bookings, selection, onSelectionChange }: Props) {
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -38,33 +47,54 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
     return () => clearInterval(t);
   }, []);
 
+  // All day/slot values below are ABSOLUTE instants anchored to New York wall
+  // clock (built via nyWallToUtc), never the browser's local zone. That's what
+  // makes the grid identical for a guest in Madrid and one in Brooklyn.
+  // `today` = NY midnight of the current NY calendar day.
   const today = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
+    const p = nyParts(new Date());
+    return nyWallToUtc(p.year, p.month - 1, p.day, 0, 0);
   }, []);
 
   const maxDate = useMemo(() => {
-    const d = new Date(today);
-    d.setMonth(d.getMonth() + BOOKING_WINDOW_MONTHS);
-    return d;
+    const p = nyParts(today);
+    return nyWallToUtc(p.year, p.month - 1 + BOOKING_WINDOW_MONTHS, p.day, 0, 0);
   }, [today]);
 
   const [weekStart, setWeekStart] = useState<Date>(today);
 
-  // Days currently visible
+  // Days currently visible — NY midnights, so the day columns are NY days.
   const days = useMemo(() => {
+    const p = nyParts(weekStart);
     const arr: Date[] = [];
     for (let i = 0; i < DAYS_VISIBLE; i++) {
-      const d = new Date(weekStart);
-      d.setDate(d.getDate() + i);
-      arr.push(d);
+      arr.push(nyWallToUtc(p.year, p.month - 1, p.day + i, 0, 0));
     }
     return arr;
   }, [weekStart]);
 
-  // 48 half-hour slots
-  const dayTemplate = useMemo(() => daySlots(today), [today]);
+  // 48 half-hour rows, described by NY wall-clock hour/minute (no zone ambiguity).
+  const rowMeta = useMemo(
+    () =>
+      Array.from({ length: 48 }, (_, i) => ({
+        hour: Math.floor(i / 2),
+        minute: i % 2 === 0 ? 0 : 30,
+      })),
+    []
+  );
+
+  // Precompute the bookable instant for every [day][row] cell once per week so
+  // hover re-renders stay cheap. slotGrid[dayIdx][rowIdx] is a NY-anchored Date.
+  const slotGrid = useMemo(
+    () =>
+      days.map((d) => {
+        const p = nyParts(d);
+        return rowMeta.map((r) =>
+          nyWallToUtc(p.year, p.month - 1, p.day, r.hour, r.minute)
+        );
+      }),
+    [days, rowMeta]
+  );
 
   // Occupied slots for this space (across all bookings, regardless of day)
   const occupiedMap = useMemo(
@@ -101,7 +131,7 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
   // Auto-scroll to a sensible time on mount (scroll to current hour - 1, or 9am if it's far off)
   useEffect(() => {
     if (!scrollRef.current) return;
-    const targetHour = today.toDateString() === days[0].toDateString() ? Math.max(0, now.getHours() - 1) : 9;
+    const targetHour = today.getTime() === days[0].getTime() ? Math.max(0, nyParts(now).hour - 1) : 9;
     const slotHeight = 28; // px
     scrollRef.current.scrollTop = targetHour * 2 * slotHeight;
   }, []); // mount only
@@ -216,8 +246,8 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
   }
 
   function shiftWeek(delta: number) {
-    const next = new Date(weekStart);
-    next.setDate(next.getDate() + delta * DAYS_VISIBLE);
+    const p = nyParts(weekStart);
+    const next = nyWallToUtc(p.year, p.month - 1, p.day + delta * DAYS_VISIBLE, 0, 0);
     if (next < today) {
       setWeekStart(today);
       return;
@@ -247,6 +277,9 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
             <div className="text-eyebrow">Availability</div>
             <div className="text-sm font-medium" data-testid="text-week-range">
               {fmtDay(days[0])} — {fmtDay(lastVisibleDay)}
+            </div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              All times shown in New York (ET)
             </div>
           </div>
         </div>
@@ -286,7 +319,7 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
       <div className="grid border-b border-card-border bg-background/40" style={{ gridTemplateColumns: "56px repeat(7, minmax(0, 1fr))" }}>
         <div className="p-2" />
         {days.map((d) => {
-          const isToday = d.toDateString() === today.toDateString();
+          const isToday = d.getTime() === today.getTime();
           return (
             <div
               key={d.toISOString()}
@@ -296,10 +329,10 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
               )}
             >
               <div className="text-eyebrow">
-                {d.toLocaleDateString("en-US", { weekday: "short" })}
+                {d.toLocaleDateString("en-US", { timeZone: NY_TZ, weekday: "short" })}
               </div>
               <div className={cn("text-sm font-medium tabular-nums", isToday && "text-primary")}>
-                {d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
+                {d.toLocaleDateString("en-US", { timeZone: NY_TZ, month: "numeric", day: "numeric" })}
               </div>
             </div>
           );
@@ -313,8 +346,8 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
           style={{ gridTemplateColumns: "56px repeat(7, minmax(0, 1fr))" }}
           onMouseLeave={() => setHoverEnd(null)}
         >
-          {dayTemplate.map((slot, slotIdx) => {
-            const isHourMark = slot.getMinutes() === 0;
+          {rowMeta.map((row, slotIdx) => {
+            const isHourMark = row.minute === 0;
             const labelSlot = slotIdx % 2 === 0; // show label on hour marks
             return (
               <div key={`row-${slotIdx}`} className="contents">
@@ -326,27 +359,19 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                     isHourMark && "border-t border-card-border"
                   )}
                 >
-                  {labelSlot ? fmtHour12(slot) : ""}
+                  {labelSlot ? hourLabel(row.hour) : ""}
                 </div>
                 {/* 7 day columns */}
                 {days.map((d, dayIdx) => {
-                  const slotDate = new Date(
-                    d.getFullYear(),
-                    d.getMonth(),
-                    d.getDate(),
-                    slot.getHours(),
-                    slot.getMinutes(),
-                    0,
-                    0
-                  );
+                  const slotDate = slotGrid[dayIdx][slotIdx];
                   const occupied = occupiedMap.get(slotDate.toISOString());
                   const tooEarly = slotDate < minBookableTime;
                   const beyondWindow = slotDate >= maxDate;
                   const interactive = !occupied && !tooEarly && !beyondWindow;
                   const selected = inSelection(slotDate);
                   const isStart = start && slotDate.getTime() === start.getTime();
-                  const isFirstOfHour = slot.getMinutes() === 0;
-                  const hour = slot.getHours();
+                  const isFirstOfHour = row.minute === 0;
+                  const hour = row.hour;
                   const isNight = hour >= 20 || hour < 6;
 
                   let statusLabel = "";
@@ -370,9 +395,9 @@ export function Scheduler({ space, activity, bookings, selection, onSelectionCha
                       data-testid={`slot-${space.id}-${slotDate.toISOString()}`}
                       title={
                         statusLabel ||
-                        `${fmtTime12(slotDate)} · ${slotDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                        `${fmtTime12(slotDate)} · ${slotDate.toLocaleDateString("en-US", { timeZone: NY_TZ, month: "short", day: "numeric" })}`
                       }
-                      aria-label={`${fmtTime12(slotDate)} on ${slotDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}${statusLabel ? `, ${statusLabel}` : ""}`}
+                      aria-label={`${fmtTime12(slotDate)} on ${slotDate.toLocaleDateString("en-US", { timeZone: NY_TZ, weekday: "long", month: "long", day: "numeric" })}${statusLabel ? `, ${statusLabel}` : ""}`}
                       className={cn(
                         "slot-cell relative h-7 border-l border-card-border text-left",
                         isFirstOfHour && "border-t border-card-border",

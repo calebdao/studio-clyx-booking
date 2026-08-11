@@ -542,22 +542,110 @@ export function computePriceBreakdown(input: PriceInput): PriceBreakdown {
   };
 }
 
+// ----- Studio timezone anchoring -----
+// The studios are physical rooms in Brooklyn, so every slot the guest sees and
+// picks is New York wall-clock time — regardless of the guest's own browser
+// timezone. A guest in Madrid and a guest in Brooklyn must see the SAME grid.
+// These helpers translate between a NY wall-clock time and the absolute instant
+// (UTC) we store, using Intl so DST is handled automatically. Never build a
+// bookable instant with the local `new Date(y, m, d, h, min)` constructor — that
+// silently uses the browser's zone and is exactly what caused wrong-time bookings.
+export const NY_TZ = "America/New_York";
+
+// Milliseconds to add to a UTC instant to get NY wall-clock fields at that
+// instant (negative, since NY is behind UTC). Handles EST/EDT via Intl.
+function nyOffsetMs(utcMs: number): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: NY_TZ,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  });
+  const m: Record<string, number> = {};
+  for (const p of dtf.formatToParts(new Date(utcMs))) {
+    if (p.type !== "literal") m[p.type] = Number(p.value);
+  }
+  const asUtc = Date.UTC(m.year, m.month - 1, m.day, m.hour, m.minute, m.second);
+  return asUtc - utcMs;
+}
+
+// The absolute instant for a given NY wall-clock time. `month0` is 0-based.
+// (On the twice-a-year DST transition the 2–3am hour is degenerate; the single
+// offset refinement resolves to the adjacent valid instant, which is fine for a
+// booking grid — those middle-of-the-night slots are effectively never booked.)
+export function nyWallToUtc(
+  year: number,
+  month0: number,
+  day: number,
+  hour = 0,
+  minute = 0
+): Date {
+  const guess = Date.UTC(year, month0, day, hour, minute);
+  const offset = nyOffsetMs(guess);
+  let utc = guess - offset;
+  const offset2 = nyOffsetMs(utc);
+  if (offset2 !== offset) utc = guess - offset2;
+  return new Date(utc);
+}
+
+export interface NyParts {
+  year: number;
+  month: number; // 1-based
+  day: number;
+  hour: number; // 0-23
+  minute: number;
+  weekday: string; // "Mon", "Tue", ...
+}
+
+// NY wall-clock fields of an absolute instant.
+export function nyParts(d: Date): NyParts {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: NY_TZ,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    weekday: "short",
+  });
+  const m: Record<string, string> = {};
+  for (const p of dtf.formatToParts(d)) {
+    if (p.type !== "literal") m[p.type] = p.value;
+  }
+  return {
+    year: Number(m.year),
+    month: Number(m.month),
+    day: Number(m.day),
+    hour: Number(m.hour),
+    minute: Number(m.minute),
+    weekday: m.weekday,
+  };
+}
+
+// All time/day formatters render in New York time so labels are consistent for
+// every viewer. They now receive absolute instants everywhere (the scheduler was
+// updated to build NY-anchored instants), so forcing the zone here is safe.
 // Format a Date as a 30-min slot label, e.g. "10:00", "10:30", "00:00"
 export function fmtTime(d: Date): string {
-  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return d.toLocaleTimeString("en-US", { timeZone: NY_TZ, hour: "2-digit", minute: "2-digit", hour12: false });
 }
 export function fmtTime12(d: Date): string {
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  return d.toLocaleTimeString("en-US", { timeZone: NY_TZ, hour: "numeric", minute: "2-digit", hour12: true });
 }
 // Compact on-the-hour label for the scheduler rail, e.g. "9 AM", "12 PM", "11 PM"
 export function fmtHour12(d: Date): string {
-  return d.toLocaleTimeString("en-US", { hour: "numeric", hour12: true });
+  return d.toLocaleTimeString("en-US", { timeZone: NY_TZ, hour: "numeric", hour12: true });
 }
 export function fmtDay(d: Date): string {
-  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", { timeZone: NY_TZ, weekday: "short", month: "short", day: "numeric" });
 }
 export function fmtDayLong(d: Date): string {
-  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("en-US", { timeZone: NY_TZ, weekday: "long", month: "long", day: "numeric", year: "numeric" });
 }
 export function fmtMoney(n: number): string {
   return `$${n.toFixed(2)}`;

@@ -131,7 +131,7 @@ export const SPACES: Space[] = [
     swatch: "bg-[#7A4A2E]", // burnt sienna
     hex: "#7A4A2E",
     image:
-      "https://images.squarespace-cdn.com/content/v1/666b23ff5801013aa6a66b6f/93f792d6-fa9a-4808-b970-b64c842debe4/DSC00460+copy.jpg?format=1000w",
+      "https://images.squarespace-cdn.com/content/v1/666b23ff5801013aa6a66b6f/96d9f117-dff5-4798-b0f0-8f895b0f2746/DSC01325.jpg?format=1000w",
   },
   {
     id: "lincoln-apartment",

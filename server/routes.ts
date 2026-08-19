@@ -45,7 +45,7 @@ import {
   refundPaymentIntent,
   stripeStatus,
 } from "./stripe";
-import { sendSlotTakenRefundEmail } from "./integrations";
+import { sendSlotTakenRefundEmail, sendOwnerCardBookingFailedAlert } from "./integrations";
 import {
   agentAutoSendInstructions,
   agentStatus,
@@ -969,6 +969,21 @@ export async function registerRoutes(
               console.error(
                 `[stripe] webhook: PI ${pi.id} has bookingDraft=1 but metadata failed to decode`
               );
+              // The card was charged but we can't build the booking — never let
+              // this fail silently. Alert the owner with the PI + readable fields.
+              try {
+                await sendOwnerCardBookingFailedAlert({
+                  paymentIntentId: pi.id,
+                  amount: pi.amount != null ? pi.amount / 100 : undefined,
+                  reason: "PaymentIntent metadata could not be decoded into a booking.",
+                  metadata: meta,
+                });
+              } catch (e) {
+                console.error(
+                  `[stripe] owner alert (decode failure) failed for PI ${pi.id}:`,
+                  e
+                );
+              }
               break;
             }
             // Idempotency check first — Stripe retries.
@@ -1020,6 +1035,20 @@ export async function registerRoutes(
               } catch (e) {
                 console.error(
                   `[stripe] slot-taken email failed for PI ${pi.id}:`,
+                  e
+                );
+              }
+              // Also tell the owner money came in and was refunded.
+              try {
+                await sendOwnerCardBookingFailedAlert({
+                  paymentIntentId: pi.id,
+                  amount: pi.amount != null ? pi.amount / 100 : undefined,
+                  reason: `Slot was taken before payment cleared (${result.reason}); card auto-refunded.`,
+                  metadata: meta,
+                });
+              } catch (e) {
+                console.error(
+                  `[stripe] owner alert (slot conflict) failed for PI ${pi.id}:`,
                   e
                 );
               }
@@ -1094,6 +1123,19 @@ export async function registerRoutes(
             console.warn(
               `[stripe] webhook payment_intent.succeeded received but no booking id resolvable for PI ${pi.id}`
             );
+            try {
+              await sendOwnerCardBookingFailedAlert({
+                paymentIntentId: pi.id,
+                amount: pi.amount != null ? pi.amount / 100 : undefined,
+                reason: "Payment succeeded but no booking id was resolvable (no draft metadata, no matching row).",
+                metadata: meta,
+              });
+            } catch (e) {
+              console.error(
+                `[stripe] owner alert (no resolvable booking) failed for PI ${pi.id}:`,
+                e
+              );
+            }
             break;
           }
           const existing = await storage.getBooking(bookingId);

@@ -271,6 +271,74 @@ export async function sendAgentNovelQuestionAlert(args: {
   });
 }
 
+// Safety net: a card payment SUCCEEDED but we could not turn it into a booking
+// (metadata failed to decode, or the slot was taken and the card was refunded).
+// The guest has been charged, so this must never fail silently — alert the owner
+// with the PaymentIntent link and whatever booking details we can read.
+export async function sendOwnerCardBookingFailedAlert(args: {
+  paymentIntentId: string;
+  amount?: number; // dollars
+  reason: string;
+  metadata?: Record<string, string>;
+}) {
+  const to = getOwnerAlertRecipients();
+  if (to.length === 0) {
+    console.log(
+      `[integrations] simulation (OWNER_ALERT_EMAILS missing): card-booking-failed alert for ${args.paymentIntentId}`
+    );
+    return { ok: true, mode: "simulation" as const, reason: "OWNER_ALERT_EMAILS missing" };
+  }
+  const stripeUrl = `https://dashboard.stripe.com/payments/${args.paymentIntentId}`;
+  const amt =
+    typeof args.amount === "number" ? `$${args.amount.toFixed(2)}` : "(unknown amount)";
+  const detailKeys = [
+    "spaceId",
+    "activityId",
+    "start",
+    "end",
+    "guestFirstName",
+    "guestLastName",
+    "guestEmail",
+    "guestPhone",
+    "guestCount",
+    "customerTotal",
+  ];
+  const detailLines = args.metadata
+    ? detailKeys
+        .filter((k) => args.metadata![k])
+        .map((k) => `  ${k}: ${args.metadata![k]}`)
+    : [];
+  const subject = `⚠️ Paid card booking needs manual action (${args.paymentIntentId})`;
+  const text = [
+    `A card payment of ${amt} SUCCEEDED but the booking could not be created automatically.`,
+    `Reason: ${args.reason}`,
+    ``,
+    `The guest has been charged. Create the booking manually and/or refund as appropriate.`,
+    `Stripe payment: ${stripeUrl}`,
+    ...(detailLines.length ? [``, `Booking details from Stripe metadata:`, ...detailLines] : []),
+  ].join("\n");
+  const html =
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a">` +
+    `<p><b>A card payment of ${escapeHtml(amt)} succeeded but the booking could not be created automatically.</b></p>` +
+    `<p><b>Reason:</b> ${escapeHtml(args.reason)}</p>` +
+    `<p>The guest has been charged. Create the booking manually and/or refund as appropriate.</p>` +
+    `<p><a href="${stripeUrl}">Open the payment in Stripe →</a></p>` +
+    (detailLines.length
+      ? `<pre style="white-space:pre-wrap;border-left:3px solid #ddd;padding-left:10px;color:#444">${escapeHtml(
+          detailLines.join("\n")
+        )}</pre>`
+      : "") +
+    `</div>`;
+  return sendResendEmail({
+    to,
+    subject,
+    html,
+    text,
+    label: "card booking failed alert",
+    bookingId: `pi:${args.paymentIntentId}`,
+  });
+}
+
 function getOwnerReminderRecipient(): string {
   const raw = (process.env.OWNER_REMINDER_EMAIL ?? "").trim();
   return raw || DEFAULT_OWNER_REMINDER_EMAIL;

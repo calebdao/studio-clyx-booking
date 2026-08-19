@@ -238,10 +238,98 @@ export interface CreateDraftPaymentIntentResult {
   error?: string;
 }
 
+// Stripe caps each metadata value at 500 chars. Encoding all add-ons into ONE
+// JSON string and slicing it to fit (the old approach) could truncate mid-item,
+// which made the webhook's JSON.parse throw and SILENTLY DROP A PAID BOOKING.
+// Instead we encode add-ons as compact "id:qty" tokens and spill across numbered
+// keys (addons, addons2, ...), splitting only on item boundaries — never mid-item.
+// addOnIds are `ao-<digits>-<base36>` / `ao-seed-N` (no ':' or ','), so the
+// delimiter scheme is unambiguous.
+const ADDON_META_CHUNK_MAX = 480;
+
+function encodeAddonsMetadata(addons: SelectedAddOn[]): Record<string, string> {
+  const tokens = addons.map((a) => `${a.addOnId}:${a.quantity}`);
+  const chunks: string[] = [];
+  let cur = "";
+  for (const t of tokens) {
+    const next = cur ? `${cur},${t}` : t;
+    if (next.length > ADDON_META_CHUNK_MAX) {
+      if (cur) chunks.push(cur);
+      cur = t; // a single token is ~30 chars, always under the cap
+    } else {
+      cur = next;
+    }
+  }
+  if (cur) chunks.push(cur);
+  const out: Record<string, string> = { addonsCount: String(addons.length) };
+  chunks.forEach((c, i) => {
+    out[i === 0 ? "addons" : `addons${i + 1}`] = c;
+  });
+  return out;
+}
+
 /**
- * Stripe metadata limits: 50 keys, value max 500 chars, total ≤ 8KB.
- * Truncate name/email/phone defensively. Addons are JSON-encoded — even
- * with 6 items @ ~60 chars each we stay well under the 500-char limit.
+ * Tolerantly decode the add-ons packed into PaymentIntent metadata. Handles the
+ * new compact chunked "id:qty" format AND the legacy single-JSON format —
+ * including a TRUNCATED legacy JSON string from the old buggy encoder, from
+ * which we salvage every complete {"addOnId":...,"quantity":N} object. Never
+ * throws, so a paid booking is never dropped over a metadata quirk.
+ */
+export function decodeAddonsMetadata(
+  metadata: Record<string, string>
+): Array<{ addOnId: string; quantity: number }> {
+  const parts: string[] = [];
+  if (metadata.addons) parts.push(metadata.addons);
+  for (let i = 2; metadata[`addons${i}`] != null; i++) {
+    parts.push(metadata[`addons${i}`]);
+  }
+  const joined = parts.join(",").trim();
+  if (!joined) return [];
+
+  // Legacy JSON format begins with "[".
+  if (joined.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(joined);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((a) => a && typeof a.addOnId === "string")
+          .map((a) => ({
+            addOnId: a.addOnId as string,
+            quantity: Number(a.quantity) || 1,
+          }));
+      }
+    } catch {
+      // Truncated/malformed — fall through and salvage complete objects.
+    }
+    const salvaged: Array<{ addOnId: string; quantity: number }> = [];
+    const re = /\{"addOnId":"([^"]+)","quantity":(\d+)\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(joined))) {
+      salvaged.push({ addOnId: m[1], quantity: Number(m[2]) || 1 });
+    }
+    return salvaged;
+  }
+
+  // New compact "id:qty,id:qty" format.
+  const out: Array<{ addOnId: string; quantity: number }> = [];
+  for (const tok of joined.split(",")) {
+    const t = tok.trim();
+    if (!t) continue;
+    const idx = t.lastIndexOf(":");
+    if (idx <= 0) continue;
+    const id = t.slice(0, idx);
+    const qty = Number(t.slice(idx + 1));
+    if (id && Number.isFinite(qty) && qty > 0) {
+      out.push({ addOnId: id, quantity: qty });
+    }
+  }
+  return out;
+}
+
+/**
+ * Stripe metadata limits: 50 keys, value max 500 chars, total ≤ 8KB. Names/
+ * email/phone are truncated defensively; add-ons are chunked (see
+ * encodeAddonsMetadata) so they can never truncate mid-item.
  */
 function encodeDraftMetadata(draft: CardBookingDraft, cardFeeAmount: number) {
   const customerTotal = Math.round((draft.baseTotal + cardFeeAmount) * 100) / 100;
@@ -257,12 +345,7 @@ function encodeDraftMetadata(draft: CardBookingDraft, cardFeeAmount: number) {
     guestPhone: (draft.guest.phone ?? "").slice(0, 40),
     guestCount: String(draft.guestCount),
     alcohol: draft.alcohol ? "1" : "0",
-    addons: JSON.stringify(
-      draft.addons.map((a) => ({
-        addOnId: a.addOnId,
-        quantity: a.quantity,
-      }))
-    ).slice(0, 480),
+    ...encodeAddonsMetadata(draft.addons),
     baseTotal: draft.baseTotal.toFixed(2),
     cardFeeAmount: cardFeeAmount.toFixed(2),
     customerTotal: customerTotal.toFixed(2),
@@ -308,7 +391,7 @@ export function decodeDraftMetadata(
       },
       guestCount: Number(metadata.guestCount) || 1,
       alcohol: metadata.alcohol === "1",
-      addons: JSON.parse(metadata.addons || "[]"),
+      addons: decodeAddonsMetadata(metadata),
       baseTotal: Number(metadata.baseTotal) || 0,
       cardFeeAmount: Number(metadata.cardFeeAmount) || 0,
       customerTotal: Number(metadata.customerTotal) || 0,

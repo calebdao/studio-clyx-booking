@@ -50,8 +50,10 @@ export interface WeekdayBucket {
   weekday: string;
   count: number;
   hours: number;
-  web: number; // direct/website (DB) bookings
-  external: number; // Peerspace/Giggster etc. (Google Calendar)
+  web: number; // direct/website (DB) booking count
+  external: number; // Peerspace/Giggster etc. (Google Calendar) count
+  webHours: number;
+  externalHours: number;
 }
 export interface MonthBucket {
   month: string; // "YYYY-MM" (NY)
@@ -59,6 +61,8 @@ export interface MonthBucket {
   hours: number;
   web: number;
   external: number;
+  webHours: number;
+  externalHours: number;
 }
 export interface StudioBucket {
   spaceId: string;
@@ -164,7 +168,10 @@ export async function getBookingAnalytics(
 
   // --- Aggregate ---
   const weekdayMap = new Map<string, WeekdayBucket>(
-    WEEKDAYS.map((d) => [d, { weekday: d, count: 0, hours: 0, web: 0, external: 0 }])
+    WEEKDAYS.map((d) => [
+      d,
+      { weekday: d, count: 0, hours: 0, web: 0, external: 0, webHours: 0, externalHours: 0 },
+    ])
   );
   const monthMap = new Map<string, MonthBucket>();
   const studioMap = new Map<string, StudioBucket>();
@@ -181,16 +188,28 @@ export async function getBookingAnalytics(
     const wb = weekdayMap.get(wd)!;
     wb.count++;
     wb.hours += h;
-    wb[s.channel]++;
+    if (s.channel === "web") {
+      wb.web++;
+      wb.webHours += h;
+    } else {
+      wb.external++;
+      wb.externalHours += h;
+    }
 
     let mb = monthMap.get(month);
     if (!mb) {
-      mb = { month, count: 0, hours: 0, web: 0, external: 0 };
+      mb = { month, count: 0, hours: 0, web: 0, external: 0, webHours: 0, externalHours: 0 };
       monthMap.set(month, mb);
     }
     mb.count++;
     mb.hours += h;
-    mb[s.channel]++;
+    if (s.channel === "web") {
+      mb.web++;
+      mb.webHours += h;
+    } else {
+      mb.external++;
+      mb.externalHours += h;
+    }
 
     let sb = studioMap.get(s.spaceId);
     if (!sb) {
@@ -208,11 +227,21 @@ export async function getBookingAnalytics(
   const round1 = (n: number) => Math.round(n * 10) / 10;
   const byWeekday = WEEKDAYS.map((d) => {
     const b = weekdayMap.get(d)!;
-    return { ...b, hours: round1(b.hours) };
+    return {
+      ...b,
+      hours: round1(b.hours),
+      webHours: round1(b.webHours),
+      externalHours: round1(b.externalHours),
+    };
   });
   const byMonth = Array.from(monthMap.values())
     .sort((a, b) => a.month.localeCompare(b.month))
-    .map((b) => ({ ...b, hours: round1(b.hours) }));
+    .map((b) => ({
+      ...b,
+      hours: round1(b.hours),
+      webHours: round1(b.webHours),
+      externalHours: round1(b.externalHours),
+    }));
   const byStudio = Array.from(studioMap.values())
     .sort((a, b) => b.count - a.count)
     .map((b) => ({ ...b, hours: round1(b.hours) }));

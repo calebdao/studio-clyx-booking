@@ -899,34 +899,49 @@ function InsightsContent({
   data: BookingAnalytics;
   metric: "count" | "hours";
 }) {
-  const busiest = [...data.byWeekday].sort((a, b) => b.count - a.count)[0];
-  const quietest = [...data.byWeekday].sort((a, b) => a.count - b.count)[0];
+  const isHours = metric === "hours";
+  const metricVal = (b: { count: number; hours: number }) => (isHours ? b.hours : b.count);
+  const unit = isHours ? "hrs" : "bookings";
+  const busiest = [...data.byWeekday].sort((a, b) => metricVal(b) - metricVal(a))[0];
+  const quietest = [...data.byWeekday].sort((a, b) => metricVal(a) - metricVal(b))[0];
+  const avgLen =
+    data.totals.sessions > 0 ? data.totals.hours / data.totals.sessions : 0;
 
   const weekdayData = data.byWeekday.map((b) => ({
     day: b.weekday.slice(0, 3),
-    Website: b.web,
-    External: b.external,
-    Hours: b.hours,
+    Website: isHours ? b.webHours : b.web,
+    External: isHours ? b.externalHours : b.external,
   }));
   const monthData = data.byMonth.map((b) => ({
     label: monthLabel(b.month),
-    Website: b.web,
-    External: b.external,
-    Hours: b.hours,
+    Website: isHours ? b.webHours : b.web,
+    External: isHours ? b.externalHours : b.external,
   }));
 
   return (
     <div className="space-y-5">
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-        <InsightStat label="Sessions" value={String(data.totals.sessions)} sub={`${data.totals.hours} hrs booked`} />
+        <InsightStat
+          label="Sessions"
+          value={String(data.totals.sessions)}
+          sub={`${data.totals.hours} hrs · ${avgLen.toFixed(1)}h avg`}
+        />
         <InsightStat
           label="Channels"
           value={`${data.totals.web} / ${data.totals.external}`}
           sub="website / external"
         />
-        <InsightStat label="Busiest day" value={busiest.weekday} sub={`${busiest.count} bookings`} />
-        <InsightStat label="Quietest day" value={quietest.weekday} sub={`${quietest.count} bookings`} />
+        <InsightStat
+          label={`Busiest day (${isHours ? "hrs" : "bookings"})`}
+          value={busiest.weekday}
+          sub={`${metricVal(busiest)} ${unit}`}
+        />
+        <InsightStat
+          label={`Quietest day (${isHours ? "hrs" : "bookings"})`}
+          value={quietest.weekday}
+          sub={`${metricVal(quietest)} ${unit}`}
+        />
       </div>
 
       {/* By weekday */}
@@ -944,15 +959,9 @@ function InsightsContent({
                 contentStyle={{ fontSize: 12, borderRadius: 8 }}
                 cursor={{ fill: "currentColor", opacity: 0.05 }}
               />
-              {metric === "count" ? (
-                <>
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="Website" stackId="a" fill={INSIGHT_WEB_COLOR} radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="External" stackId="a" fill={INSIGHT_EXT_COLOR} radius={[3, 3, 0, 0]} />
-                </>
-              ) : (
-                <Bar dataKey="Hours" fill={INSIGHT_WEB_COLOR} radius={[3, 3, 0, 0]} />
-              )}
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="Website" stackId="a" fill={INSIGHT_WEB_COLOR} />
+              <Bar dataKey="External" stackId="a" fill={INSIGHT_EXT_COLOR} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -973,14 +982,8 @@ function InsightsContent({
                 contentStyle={{ fontSize: 12, borderRadius: 8 }}
                 cursor={{ fill: "currentColor", opacity: 0.05 }}
               />
-              {metric === "count" ? (
-                <>
-                  <Bar dataKey="Website" stackId="a" fill={INSIGHT_WEB_COLOR} />
-                  <Bar dataKey="External" stackId="a" fill={INSIGHT_EXT_COLOR} radius={[3, 3, 0, 0]} />
-                </>
-              ) : (
-                <Bar dataKey="Hours" fill={INSIGHT_WEB_COLOR} radius={[3, 3, 0, 0]} />
-              )}
+              <Bar dataKey="Website" stackId="a" fill={INSIGHT_WEB_COLOR} />
+              <Bar dataKey="External" stackId="a" fill={INSIGHT_EXT_COLOR} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -991,7 +994,9 @@ function InsightsContent({
         <div className="text-eyebrow mb-2.5">By studio</div>
         <div className="space-y-1.5">
           {data.byStudio.map((s) => {
-            const max = Math.max(...data.byStudio.map((x) => x.count), 1);
+            const studioVal = (x: { count: number; hours: number }) =>
+              isHours ? x.hours : x.count;
+            const max = Math.max(...data.byStudio.map(studioVal), 1);
             const name = spaceById(s.spaceId as Booking["spaceId"])?.name ?? s.spaceId;
             return (
               <div key={s.spaceId} className="flex items-center gap-2 text-xs">
@@ -999,7 +1004,7 @@ function InsightsContent({
                 <div className="flex-1 h-4 rounded-sm bg-muted/40 overflow-hidden">
                   <div
                     className="h-full rounded-sm"
-                    style={{ width: `${(s.count / max) * 100}%`, background: INSIGHT_WEB_COLOR }}
+                    style={{ width: `${(studioVal(s) / max) * 100}%`, background: INSIGHT_WEB_COLOR }}
                   />
                 </div>
                 <div className="w-24 shrink-0 text-right font-mono tabular-nums text-muted-foreground">

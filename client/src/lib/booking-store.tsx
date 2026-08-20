@@ -318,6 +318,8 @@ export interface AnalyticsWeekdayBucket {
   hours: number;
   web: number;
   external: number;
+  webHours: number;
+  externalHours: number;
 }
 export interface AnalyticsMonthBucket {
   month: string;
@@ -325,6 +327,8 @@ export interface AnalyticsMonthBucket {
   hours: number;
   web: number;
   external: number;
+  webHours: number;
+  externalHours: number;
 }
 export interface AnalyticsStudioBucket {
   spaceId: string;

@@ -19,6 +19,8 @@ import {
   CreateAddOnFields,
   useAdmin,
   useAdminAddOns,
+  useAdminAnalytics,
+  type BookingAnalytics,
   useAddOnMutations,
   useBookings,
   useAdminBookings,
@@ -43,6 +45,16 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RTooltip,
+  Legend,
+} from "recharts";
 import {
   Dialog,
   DialogContent,
@@ -266,6 +278,9 @@ function AdminConsole() {
           <TabsTrigger value="calendar" data-testid="tab-calendar">
             Calendar
           </TabsTrigger>
+          <TabsTrigger value="insights" data-testid="tab-insights">
+            Insights
+          </TabsTrigger>
           <TabsTrigger value="addons" data-testid="tab-addons">
             Add-ons
           </TabsTrigger>
@@ -363,6 +378,10 @@ function AdminConsole() {
         {/* CALENDAR PREVIEW */}
         <TabsContent value="calendar">
           <CalendarPreview bookings={bookings} />
+        </TabsContent>
+
+        <TabsContent value="insights">
+          <InsightsPanel />
         </TabsContent>
 
         {/* ADD-ONS MANAGER */}
@@ -774,6 +793,243 @@ function BookingRow({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 lg:justify-end">{actions}</div>
+    </div>
+  );
+}
+
+// ----- Insights (historical booking analytics) -----
+
+const INSIGHT_WEB_COLOR = "#2F6F6A"; // teal — website/direct
+const INSIGHT_EXT_COLOR = "#C08A2D"; // brass — external channels
+
+function fmtIsoDate(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-US", {
+    timeZone: NY_TZ,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function monthLabel(m: string): string {
+  const [y, mo] = m.split("-").map(Number);
+  if (!y || !mo) return m;
+  const d = new Date(Date.UTC(y, mo - 1, 1));
+  return `${d.toLocaleString("en-US", { month: "short", timeZone: "UTC" })} '${String(y).slice(2)}`;
+}
+
+function InsightStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-md border border-card-border bg-card px-3 py-2.5">
+      <div className="text-eyebrow text-muted-foreground">{label}</div>
+      <div className="text-lg font-semibold tracking-tight tabular-nums">{value}</div>
+      {sub && <div className="text-[11px] text-muted-foreground mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
+function InsightsPanel() {
+  const [months, setMonths] = useState(12);
+  const [metric, setMetric] = useState<"count" | "hours">("count");
+  const { data, isLoading, isError, error } = useAdminAnalytics(months);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium tracking-tight">Booking insights</div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Real historical demand (website + external channels), bucketed in New York time.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1" data-testid="insights-lookback">
+            {[6, 12, 24].map((m) => (
+              <Button
+                key={m}
+                size="sm"
+                variant={months === m ? "default" : "outline"}
+                className="h-7 text-[11px]"
+                onClick={() => setMonths(m)}
+              >
+                {m}mo
+              </Button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            {(["count", "hours"] as const).map((m) => (
+              <Button
+                key={m}
+                size="sm"
+                variant={metric === m ? "default" : "outline"}
+                className="h-7 text-[11px]"
+                onClick={() => setMetric(m)}
+              >
+                {m === "count" ? "Bookings" : "Hours"}
+              </Button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="rounded-md border border-card-border bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+          Loading insights…
+        </div>
+      ) : isError ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-4 text-sm">
+          Couldn't load insights: {(error instanceof Error ? error.message : String(error)).replace(/^\d+:\s*/, "")}
+        </div>
+      ) : !data || data.totals.sessions === 0 ? (
+        <div className="rounded-md border border-card-border bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+          No bookings found in the last {months} months.
+        </div>
+      ) : (
+        <InsightsContent data={data} metric={metric} />
+      )}
+    </div>
+  );
+}
+
+function InsightsContent({
+  data,
+  metric,
+}: {
+  data: BookingAnalytics;
+  metric: "count" | "hours";
+}) {
+  const busiest = [...data.byWeekday].sort((a, b) => b.count - a.count)[0];
+  const quietest = [...data.byWeekday].sort((a, b) => a.count - b.count)[0];
+
+  const weekdayData = data.byWeekday.map((b) => ({
+    day: b.weekday.slice(0, 3),
+    Website: b.web,
+    External: b.external,
+    Hours: b.hours,
+  }));
+  const monthData = data.byMonth.map((b) => ({
+    label: monthLabel(b.month),
+    Website: b.web,
+    External: b.external,
+    Hours: b.hours,
+  }));
+
+  return (
+    <div className="space-y-5">
+      {/* Summary tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <InsightStat label="Sessions" value={String(data.totals.sessions)} sub={`${data.totals.hours} hrs booked`} />
+        <InsightStat
+          label="Channels"
+          value={`${data.totals.web} / ${data.totals.external}`}
+          sub="website / external"
+        />
+        <InsightStat label="Busiest day" value={busiest.weekday} sub={`${busiest.count} bookings`} />
+        <InsightStat label="Quietest day" value={quietest.weekday} sub={`${quietest.count} bookings`} />
+      </div>
+
+      {/* By weekday */}
+      <div className="rounded-md border border-card-border bg-card p-3">
+        <div className="text-eyebrow mb-2">
+          {metric === "count" ? "Bookings" : "Hours booked"} by day of week
+        </div>
+        <div style={{ width: "100%", height: 260 }}>
+          <ResponsiveContainer>
+            <BarChart data={weekdayData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.12} vertical={false} />
+              <XAxis dataKey="day" tick={{ fontSize: 12 }} stroke="currentColor" opacity={0.6} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="currentColor" opacity={0.6} />
+              <RTooltip
+                contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                cursor={{ fill: "currentColor", opacity: 0.05 }}
+              />
+              {metric === "count" ? (
+                <>
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="Website" stackId="a" fill={INSIGHT_WEB_COLOR} radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="External" stackId="a" fill={INSIGHT_EXT_COLOR} radius={[3, 3, 0, 0]} />
+                </>
+              ) : (
+                <Bar dataKey="Hours" fill={INSIGHT_WEB_COLOR} radius={[3, 3, 0, 0]} />
+              )}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* By month */}
+      <div className="rounded-md border border-card-border bg-card p-3">
+        <div className="text-eyebrow mb-2">
+          {metric === "count" ? "Bookings" : "Hours booked"} by month
+        </div>
+        <div style={{ width: "100%", height: 240 }}>
+          <ResponsiveContainer>
+            <BarChart data={monthData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.12} vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="currentColor" opacity={0.6} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="currentColor" opacity={0.6} />
+              <RTooltip
+                contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                cursor={{ fill: "currentColor", opacity: 0.05 }}
+              />
+              {metric === "count" ? (
+                <>
+                  <Bar dataKey="Website" stackId="a" fill={INSIGHT_WEB_COLOR} />
+                  <Bar dataKey="External" stackId="a" fill={INSIGHT_EXT_COLOR} radius={[3, 3, 0, 0]} />
+                </>
+              ) : (
+                <Bar dataKey="Hours" fill={INSIGHT_WEB_COLOR} radius={[3, 3, 0, 0]} />
+              )}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* By studio */}
+      <div className="rounded-md border border-card-border bg-card p-3">
+        <div className="text-eyebrow mb-2.5">By studio</div>
+        <div className="space-y-1.5">
+          {data.byStudio.map((s) => {
+            const max = Math.max(...data.byStudio.map((x) => x.count), 1);
+            const name = spaceById(s.spaceId as Booking["spaceId"])?.name ?? s.spaceId;
+            return (
+              <div key={s.spaceId} className="flex items-center gap-2 text-xs">
+                <div className="w-28 shrink-0 truncate">{name}</div>
+                <div className="flex-1 h-4 rounded-sm bg-muted/40 overflow-hidden">
+                  <div
+                    className="h-full rounded-sm"
+                    style={{ width: `${(s.count / max) * 100}%`, background: INSIGHT_WEB_COLOR }}
+                  />
+                </div>
+                <div className="w-24 shrink-0 text-right font-mono tabular-nums text-muted-foreground">
+                  {s.count} · {s.hours}h
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Coverage + caveats */}
+      <div className="rounded-md border border-card-border bg-background/40 px-3 py-2.5 text-[11px] text-muted-foreground leading-relaxed">
+        <div>
+          Window: {fmtIsoDate(data.rangeStart)} – {fmtIsoDate(data.rangeEnd)} (past bookings only).
+          Data actually begins: website {fmtIsoDate(data.coverage.earliestInternal)}, external{" "}
+          {fmtIsoDate(data.coverage.earliestExternal)}.
+        </div>
+        <div className="mt-1">
+          Excludes 30-min buffer blocks and multi-day calendar holds. Website = direct
+          bookings; external = Peerspace/Giggster via Google Calendar.
+        </div>
+        {data.warnings.length > 0 && (
+          <div className="mt-1 text-amber-700">
+            {data.warnings.map((w, i) => (
+              <div key={i}>⚠ {w}</div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

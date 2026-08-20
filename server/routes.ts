@@ -46,6 +46,7 @@ import {
   stripeStatus,
 } from "./stripe";
 import { sendSlotTakenRefundEmail, sendOwnerCardBookingFailedAlert } from "./integrations";
+import { getBookingAnalytics } from "./analytics";
 import {
   agentAutoSendInstructions,
   agentStatus,
@@ -485,6 +486,18 @@ export async function registerRoutes(
     try {
       const merged = await listMergedBookings();
       res.json(merged);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Operator-only: historical booking analytics (day-of-week / month / studio)
+  // over a configurable lookback. Queries Google Calendar history + DB directly
+  // rather than the 24h-back availability feed, so it reflects real past demand.
+  app.get("/api/admin/analytics", requireAdmin, async (req, res, next) => {
+    try {
+      const months = Number(req.query.months);
+      res.json(await getBookingAnalytics(Number.isFinite(months) ? months : 12));
     } catch (e) {
       next(e);
     }

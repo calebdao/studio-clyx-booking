@@ -311,6 +311,57 @@ export function useAdminAddOns() {
   });
 }
 
+// ----- Booking analytics (admin Insights tab) -----
+export interface AnalyticsWeekdayBucket {
+  weekday: string;
+  count: number;
+  hours: number;
+  web: number;
+  external: number;
+}
+export interface AnalyticsMonthBucket {
+  month: string;
+  count: number;
+  hours: number;
+  web: number;
+  external: number;
+}
+export interface AnalyticsStudioBucket {
+  spaceId: string;
+  count: number;
+  hours: number;
+}
+export interface BookingAnalytics {
+  lookbackMonths: number;
+  generatedAt: string;
+  rangeStart: string;
+  rangeEnd: string;
+  totals: { sessions: number; hours: number; web: number; external: number };
+  coverage: { earliestInternal: string | null; earliestExternal: string | null };
+  byWeekday: AnalyticsWeekdayBucket[];
+  byMonth: AnalyticsMonthBucket[];
+  byStudio: AnalyticsStudioBucket[];
+  warnings: string[];
+}
+
+export function useAdminAnalytics(months: number) {
+  const { adminPin } = useAdmin();
+  return useQuery<BookingAnalytics>({
+    queryKey: ["/api/admin/analytics", months],
+    enabled: !!adminPin,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const res = await apiRequest(
+        "GET",
+        `/api/admin/analytics?months=${months}`,
+        undefined,
+        { headers: { "x-admin-pin": adminPin ?? "" } }
+      );
+      return (await res.json()) as BookingAnalytics;
+    },
+  });
+}
+
 export type CreateAddOnFields = {
   name: string;
   description?: string | null;

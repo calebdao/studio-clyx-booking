@@ -360,6 +360,19 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
     return;
   }
 
+  // Anything left that matches the notification subject blocklist (payout /
+  // "action required" / "respond now" / review request / etc.) is Peerspace
+  // operational noise, not a guest message — skip it so it never lands in the
+  // inbox. Real booking confirmations, updates, and reminders were already
+  // routed above; this catches the notifications whose body wording slips past
+  // the body-level isHostOpsEmail backstop.
+  if (!isActionableSubject(parsed.subject)) {
+    console.log(
+      `[gmail-inbound] non-guest notification ("${parsed.subject ?? ""}"); skipping`
+    );
+    return;
+  }
+
   const inquiry = parseInquiry(parsed.text || null);
   // Stable conversation identity (so follow-ups land in the same chatbox).
   const threadToken = computeThreadKey(from.name, inquiry, replyAddress);

@@ -193,6 +193,15 @@ const LEAD_MARKERS = [
   /wrote:\s*\n/i,
   /sent you the following message[^\n]*:?\s*\n/i,
 ];
+// Markers that begin the quoted reply history a mail client pastes below the
+// guest's own text. We cut from the earliest one FIRST, so a short reply like
+// "?" at the top isn't buried under (or mistaken for) the previous email.
+const QUOTE_MARKERS = [
+  /\n\s*On\b[\s\S]{0,300}?\bwrote:/i, // Gmail/Apple "On <date>, <name> wrote:" (incl. line-wrapped)
+  /\n-{2,}\s*original message\s*-{2,}/i, // Outlook "-----Original Message-----"
+  /\nFrom:\s.+\n(Sent|Date):\s/i, // Outlook quoted header block
+];
+
 const FOOTER_MARKERS = [
   /\n\s*On .+?\bwrote:/i, // quoted reply history
   /reply (directly )?to this email/i,
@@ -211,6 +220,17 @@ const FOOTER_MARKERS = [
 function extractGuestMessage(raw: string | null): string | null {
   if (!raw) return raw;
   let text = raw.replace(/\r\n?/g, "\n");
+
+  // Cut quoted reply history up front. A guest reply ("?", "yes", etc.) sits at
+  // the top; their client quotes the previous email below. Removing it here also
+  // stops the "Message from …" block of that quoted email from being extracted
+  // instead of the actual reply.
+  let quoteCut = text.length;
+  for (const re of QUOTE_MARKERS) {
+    const i = text.search(re);
+    if (i !== -1 && i < quoteCut) quoteCut = i;
+  }
+  text = text.slice(0, quoteCut);
 
   // Preferred: Peerspace puts the guest's message between a "Message from
   // <name>:" line and the "Stay safe on Peerspace" safety notice. Everything
@@ -252,8 +272,11 @@ function extractGuestMessage(raw: string | null): string | null {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  // Safety net: don't return an over-stripped result.
-  return text.length >= 3 ? text : raw.trim();
+  // Return whatever's left as long as it's non-empty — a genuine one-character
+  // reply like "?" is valid and must NOT trigger a fall back to the full raw
+  // email (boilerplate + quoted history). Only if stripping left nothing at all
+  // do we fall back to the raw text.
+  return text.length >= 1 ? text : raw.trim();
 }
 
 interface InquiryDetails {

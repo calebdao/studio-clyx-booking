@@ -494,7 +494,7 @@ export async function registerRoutes(
   // Operator-only: historical booking analytics (day-of-week / month / studio)
   // over a configurable lookback. Queries Google Calendar history + DB directly
   // rather than the 24h-back availability feed, so it reflects real past demand.
-  app.get("/api/admin/analytics", requireAdmin, async (req, res, next) => {
+  app.get("/api/admin/analytics", requireAdmin, requireInsightsPin, async (req, res, next) => {
     try {
       const months = Number(req.query.months);
       res.json(await getBookingAnalytics(Number.isFinite(months) ? months : 12));
@@ -646,6 +646,25 @@ export async function registerRoutes(
     const provided = (req.headers["x-admin-pin"] as string | undefined) ?? "";
     if (provided !== expected) {
       return next(httpError(401, "Invalid admin PIN."));
+    }
+    next();
+  }
+
+  // Extra gate on top of requireAdmin for owner-only analytics (the Insights
+  // tab). Staff have the admin PIN and full tab access, but Insights needs this
+  // second PIN, set as INSIGHTS_PIN in the environment (never hardcoded — the
+  // repo is public). Fail closed: if INSIGHTS_PIN is unset, Insights is locked
+  // for everyone until it's configured.
+  function requireInsightsPin(req: Request, _res: Response, next: NextFunction) {
+    const expected = process.env.INSIGHTS_PIN ?? "";
+    if (!expected) {
+      return next(
+        httpError(403, "Insights are locked. Set INSIGHTS_PIN in the server environment to enable access.")
+      );
+    }
+    const provided = (req.headers["x-insights-pin"] as string | undefined) ?? "";
+    if (provided !== expected) {
+      return next(httpError(401, "Invalid insights PIN."));
     }
     next();
   }

@@ -348,18 +348,21 @@ export interface BookingAnalytics {
   warnings: string[];
 }
 
-export function useAdminAnalytics(months: number) {
+export function useAdminAnalytics(months: number, insightsPin?: string) {
   const { adminPin } = useAdmin();
   return useQuery<BookingAnalytics>({
-    queryKey: ["/api/admin/analytics", months],
-    enabled: !!adminPin,
+    // insightsPin is part of the key so entering a new PIN refetches.
+    queryKey: ["/api/admin/analytics", months, insightsPin ?? ""],
+    enabled: !!adminPin && !!insightsPin,
     staleTime: 5 * 60_000,
+    // Don't retry a wrong PIN (401) — surface it immediately.
+    retry: false,
     queryFn: async () => {
       const res = await apiRequest(
         "GET",
         `/api/admin/analytics?months=${months}`,
         undefined,
-        { headers: { "x-admin-pin": adminPin ?? "" } }
+        { headers: { "x-admin-pin": adminPin ?? "", "x-insights-pin": insightsPin ?? "" } }
       );
       return (await res.json()) as BookingAnalytics;
     },

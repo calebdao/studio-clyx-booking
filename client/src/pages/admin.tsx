@@ -133,6 +133,9 @@ export default function AdminPage() {
 }
 
 function AdminConsole() {
+  // Insights tab is gated by an extra owner-only PIN. Lifted here so it survives
+  // tab switches (Radix unmounts inactive tab content).
+  const [insightsPin, setInsightsPin] = useState<string | null>(null);
   const {
     confirmPaymentAsync,
     releaseHoldAsync,
@@ -381,7 +384,7 @@ function AdminConsole() {
         </TabsContent>
 
         <TabsContent value="insights">
-          <InsightsPanel />
+          <InsightsPanel insightsPin={insightsPin} setInsightsPin={setInsightsPin} />
         </TabsContent>
 
         {/* ADD-ONS MANAGER */}
@@ -829,10 +832,69 @@ function InsightStat({ label, value, sub }: { label: string; value: string; sub?
   );
 }
 
-function InsightsPanel() {
+function InsightsLock({
+  onSubmit,
+  error,
+}: {
+  onSubmit: (pin: string) => void;
+  error: string | null;
+}) {
+  const [pin, setPin] = useState("");
+  return (
+    <form
+      className="max-w-sm mx-auto mt-8 rounded-md border border-card-border bg-card p-5 space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (pin.trim()) onSubmit(pin.trim());
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <Lock className="w-4 h-4 text-primary" aria-hidden />
+        <div className="text-sm font-medium tracking-tight">Insights are locked</div>
+      </div>
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        This tab is restricted. Enter the Insights PIN to view booking analytics.
+      </p>
+      <Input
+        type="password"
+        inputMode="numeric"
+        autoFocus
+        value={pin}
+        onChange={(e) => setPin(e.target.value)}
+        placeholder="Insights PIN"
+        data-testid="input-insights-pin"
+      />
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <Button type="submit" size="sm" disabled={!pin.trim()} data-testid="button-unlock-insights">
+        Unlock
+      </Button>
+    </form>
+  );
+}
+
+function InsightsPanel({
+  insightsPin,
+  setInsightsPin,
+}: {
+  insightsPin: string | null;
+  setInsightsPin: (pin: string | null) => void;
+}) {
   const [months, setMonths] = useState(12);
   const [metric, setMetric] = useState<"count" | "hours">("count");
-  const { data, isLoading, isError, error } = useAdminAnalytics(months);
+  const { data, isLoading, isError, error } = useAdminAnalytics(
+    months,
+    insightsPin ?? undefined
+  );
+
+  // Show the lock screen until a PIN has been accepted. A wrong PIN comes back
+  // as a query error — re-show the lock with the message so they can retry.
+  if (!insightsPin || isError) {
+    const msg =
+      insightsPin && isError
+        ? (error instanceof Error ? error.message : String(error)).replace(/^\d+:\s*/, "")
+        : null;
+    return <InsightsLock onSubmit={setInsightsPin} error={msg} />;
+  }
 
   return (
     <div className="space-y-4">
@@ -876,10 +938,6 @@ function InsightsPanel() {
       {isLoading ? (
         <div className="rounded-md border border-card-border bg-background/40 px-4 py-6 text-sm text-muted-foreground">
           Loading insights…
-        </div>
-      ) : isError ? (
-        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-4 text-sm">
-          Couldn't load insights: {(error instanceof Error ? error.message : String(error)).replace(/^\d+:\s*/, "")}
         </div>
       ) : !data || data.totals.sessions === 0 ? (
         <div className="rounded-md border border-card-border bg-background/40 px-4 py-6 text-sm text-muted-foreground">

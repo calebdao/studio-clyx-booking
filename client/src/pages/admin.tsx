@@ -26,6 +26,7 @@ import {
   useAdminBookings,
   useAgentConversations,
   useAgentDraftActions,
+  useSuggestReply,
   useAgentKnowledge,
   useAgentKnowledgeMutations,
   useAgentInstructions,
@@ -1930,6 +1931,7 @@ function InboxTab({
 
 function ConversationCard({ convo }: { convo: AgentConversation }) {
   const actions = useAgentDraftActions();
+  const suggest = useSuggestReply();
   const { toast } = useToast();
 
   const pendingDraft =
@@ -1957,7 +1959,24 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDraft?.id]);
 
-  const busy = actions.isPending;
+  const busy = actions.isPending || suggest.isPending;
+
+  async function handleSuggest() {
+    try {
+      await suggest.mutateAsync(convo.id);
+      toast({
+        title: "Draft ready",
+        description: "A suggested reply was generated below — edit before sending.",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not generate a reply.";
+      toast({
+        title: "Couldn't generate a reply",
+        description: msg.replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    }
+  }
 
   async function run(action: "approve" | "reject" | "edit") {
     if (!pendingDraft) return;
@@ -2120,6 +2139,20 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
                   size="sm"
                   variant="ghost"
                   disabled={busy}
+                  onClick={handleSuggest}
+                  data-testid={`button-regenerate-${convo.id}`}
+                >
+                  {suggest.isPending ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  Regenerate
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
                   onClick={() => run("reject")}
                   data-testid={`button-reject-draft-${pendingDraft.id}`}
                 >
@@ -2150,14 +2183,30 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
             </div>
           </div>
         ) : errorDraft ? (
-          <div className="text-sm text-destructive flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            <div>
-              <div className="font-medium">Draft generation failed</div>
-              <div className="text-xs text-muted-foreground break-all">
-                {errorDraft.error}
+          <div className="space-y-2">
+            <div className="text-sm text-destructive flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <div>
+                <div className="font-medium">Draft generation failed</div>
+                <div className="text-xs text-muted-foreground break-all">
+                  {errorDraft.error}
+                </div>
               </div>
             </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={handleSuggest}
+              data-testid={`button-suggest-${convo.id}`}
+            >
+              {suggest.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Try again
+            </Button>
           </div>
         ) : sentDraft ? (
           <div
@@ -2175,9 +2224,24 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
             {sentDraft.sentAt ? ` · ${fmtAgentTime(sentDraft.sentAt)}` : ""}
           </div>
         ) : (
-          <div className="text-xs text-muted-foreground">
-            No draft yet. (Is <span className="font-mono">AGENT_ENABLED</span>{" "}
-            set to <span className="font-mono">true</span>?)
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">
+              No draft yet. Ask the assistant to suggest a reply, then edit and send.
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={handleSuggest}
+              data-testid={`button-suggest-${convo.id}`}
+            >
+              {suggest.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Suggest a reply
+            </Button>
           </div>
         )}
       </div>

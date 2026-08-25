@@ -49,9 +49,11 @@ import { sendSlotTakenRefundEmail, sendOwnerCardBookingFailedAlert } from "./int
 import { getBookingAnalytics } from "./analytics";
 import {
   agentAutoSendInstructions,
+  agentEnabled,
   agentStatus,
   appendLearnedAnswer,
   deliverReply,
+  generateDraftForConversation,
   getEffectiveKnowledge,
   getKnowledgeFileDefault,
   resetKnowledgeToFile,
@@ -1306,6 +1308,36 @@ export async function registerRoutes(
         if (e instanceof ZodError) {
           return next(httpError(400, fromZodError(e).toString()));
         }
+        next(e);
+      }
+    }
+  );
+
+  // Admin Inbox: on-demand — (re)generate an AI draft reply for a
+  // conversation's latest guest message. Lets staff ask for a suggestion
+  // instead of relying on the poller's automatic draft. Requires AGENT_ENABLED.
+  app.post(
+    "/api/admin/agent/conversations/:id/suggest",
+    requireAdmin,
+    async (req, res, next) => {
+      try {
+        if (!agentEnabled()) {
+          throw httpError(
+            400,
+            "The reply assistant is off. Set AGENT_ENABLED=true to use suggestions."
+          );
+        }
+        const convo = await storage.getAgentConversation(String(req.params.id));
+        if (!convo) throw httpError(404, "Conversation not found.");
+        const lastInbound = [...convo.messages]
+          .reverse()
+          .find((m) => m.direction === "inbound");
+        if (!lastInbound) {
+          throw httpError(400, "No guest message to reply to yet.");
+        }
+        await generateDraftForConversation(convo.id, lastInbound.id);
+        res.json({ ok: true });
+      } catch (e) {
         next(e);
       }
     }

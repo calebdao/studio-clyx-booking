@@ -541,6 +541,26 @@ export function useAgentDraftActions() {
   });
 }
 
+// On-demand: ask the assistant to (re)generate a draft reply for a conversation.
+export function useSuggestReply() {
+  const { adminPin } = useAdmin();
+  const headers = { "x-admin-pin": adminPin ?? "" };
+  return useMutation({
+    mutationFn: async (conversationId: string) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/admin/agent/conversations/${conversationId}/suggest`,
+        undefined,
+        { headers }
+      );
+      return (await res.json()) as { ok: boolean };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: AGENT_CONVERSATIONS_KEY });
+    },
+  });
+}
+
 // ----- Agent knowledge base (admin Knowledge tab) -----
 
 const AGENT_KNOWLEDGE_KEY = ["/api/admin/agent/knowledge"] as const;

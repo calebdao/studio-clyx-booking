@@ -5,6 +5,7 @@ import {
   Booking,
   computePriceBreakdown,
   fmtDay,
+  fmtDayLong,
   fmtMoney,
   fmtTime12,
   NY_TZ,
@@ -398,6 +399,7 @@ function AdminConsole() {
           <InboxTab
             conversations={agentConversations.data ?? []}
             loading={agentConversations.isLoading}
+            bookings={bookings}
           />
         </TabsContent>
 
@@ -1893,13 +1895,190 @@ function inquirySummary(raw: string | null | undefined): string | null {
   }
 }
 
+// A conversation needs a reply when the most recent message is from the guest
+// (no outbound sent through the inbox after it).
+function conversationNeedsReply(convo: AgentConversation): boolean {
+  const last = convo.messages[convo.messages.length - 1];
+  return last?.direction === "inbound";
+}
+
+function fmtRowTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString("en-US", {
+    timeZone: NY_TZ,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function InboxRow({
+  convo,
+  bookings,
+  active,
+  onClick,
+}: {
+  convo: AgentConversation;
+  bookings: Booking[];
+  active: boolean;
+  onClick: () => void;
+}) {
+  const last = convo.messages[convo.messages.length - 1];
+  const snippet =
+    (last?.bodyText || "").replace(/\s+/g, " ").trim() || "(no message)";
+  const booking = convo.bookingId
+    ? bookings.find((b) => b.id === convo.bookingId)
+    : undefined;
+  const activity = booking ? activityById(booking.activityId).name : null;
+  const when = booking ? fmtDay(new Date(booking.start)) : null;
+  const space = booking ? spaceById(booking.spaceId) : undefined;
+  const needsReply = conversationNeedsReply(convo);
+  const meta = [activity, when].filter(Boolean).join(" · ");
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={`inbox-row-${convo.id}`}
+      className={cn(
+        "w-full text-left px-3 py-3 border-b border-card-border flex gap-2.5 hover:bg-muted/40 transition-colors",
+        active && "bg-primary/5"
+      )}
+    >
+      <div className="w-9 h-9 rounded-md bg-muted shrink-0 overflow-hidden flex items-center justify-center text-xs font-medium text-muted-foreground">
+        {space?.image ? (
+          <img src={space.image} alt="" className="w-full h-full object-cover" />
+        ) : (
+          (convo.guestName || convo.guestEmail || "?").charAt(0).toUpperCase()
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium truncate">
+            {convo.guestName || convo.guestEmail || "Peerspace guest"}
+          </span>
+          <span className="text-[10px] text-muted-foreground shrink-0">
+            {fmtRowTime(convo.updatedAt)}
+          </span>
+        </div>
+        <div className="text-xs text-muted-foreground truncate">{snippet}</div>
+        <div className="flex items-center gap-2 mt-1">
+          {meta && (
+            <span className="text-[10px] text-muted-foreground truncate">{meta}</span>
+          )}
+          {needsReply && (
+            <span className="text-[10px] font-medium rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-300 px-1.5 py-0.5 shrink-0">
+              Needs reply
+            </span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-eyebrow text-muted-foreground">{label}</div>
+      <div className="text-sm whitespace-pre-line">{value}</div>
+    </div>
+  );
+}
+
+function BookingDetailsPanel({
+  convo,
+  bookings,
+}: {
+  convo: AgentConversation;
+  bookings: Booking[];
+}) {
+  const booking = convo.bookingId
+    ? bookings.find((b) => b.id === convo.bookingId)
+    : undefined;
+
+  let inquiry: { listing?: string; dateTime?: string; attendees?: string } | null =
+    null;
+  if (!booking && convo.inquiryDetails) {
+    try {
+      inquiry = JSON.parse(convo.inquiryDetails);
+    } catch {
+      inquiry = null;
+    }
+  }
+
+  const statusLabel: Record<string, string> = {
+    confirmed: "Confirmed",
+    pending: "Pending",
+    held: "On hold",
+    rejected: "Cancelled / rejected",
+  };
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="text-sm font-semibold tracking-tight">Booking Details</div>
+      {booking ? (
+        <div className="space-y-3.5">
+          <DetailRow
+            label="Date & Time"
+            value={`${fmtDayLong(new Date(booking.start))}\n${fmtTime12(
+              new Date(booking.start)
+            )} – ${fmtTime12(new Date(booking.end))}`}
+          />
+          <DetailRow
+            label="Attendees"
+            value={`${booking.guestCount} ${booking.guestCount === 1 ? "person" : "people"}`}
+          />
+          <DetailRow label="Activity" value={activityById(booking.activityId).name} />
+          <DetailRow label="Alcohol" value={booking.alcohol ? "Yes" : "No"} />
+          <DetailRow label="Space" value={spaceById(booking.spaceId).name} />
+          <DetailRow
+            label="Status"
+            value={statusLabel[booking.status] ?? booking.status}
+          />
+        </div>
+      ) : inquiry && (inquiry.listing || inquiry.dateTime || inquiry.attendees) ? (
+        <div className="space-y-3.5">
+          <div className="text-[11px] text-muted-foreground">
+            No confirmed booking yet — showing the inquiry.
+          </div>
+          {inquiry.listing && <DetailRow label="Space" value={inquiry.listing} />}
+          {inquiry.dateTime && (
+            <DetailRow label="Date & Time" value={inquiry.dateTime} />
+          )}
+          {inquiry.attendees && (
+            <DetailRow label="Attendees" value={inquiry.attendees} />
+          )}
+        </div>
+      ) : (
+        <div className="text-xs text-muted-foreground">
+          No booking linked to this conversation yet.
+        </div>
+      )}
+      {convo.guestEmail && (
+        <div className="pt-2 border-t border-card-border">
+          <DetailRow label="Guest email" value={convo.guestEmail} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InboxTab({
   conversations,
   loading,
+  bookings,
 }: {
   conversations: AgentConversation[];
   loading: boolean;
+  bookings: Booking[];
 }) {
+  const sorted = useMemo(
+    () => [...conversations].sort((a, b) => b.updatedAt - a.updatedAt),
+    [conversations]
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected =
+    sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
+
   if (loading) {
     return (
       <div className="text-sm text-muted-foreground py-10 text-center">
@@ -1914,17 +2093,53 @@ function InboxTab({
         <MessageSquare className="w-6 h-6 mx-auto mb-3 text-muted-foreground" />
         <p className="text-sm font-medium">No Peerspace messages yet</p>
         <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
-          When a Peerspace notification email is forwarded in, the assistant
-          drafts a reply here for you to approve, edit, or reject.
+          When a Peerspace notification email is forwarded in, it appears here.
+          Open a conversation and click "Suggest a reply" to draft a response.
         </p>
       </div>
     );
   }
+
   return (
-    <div className="space-y-4">
-      {conversations.map((c) => (
-        <ConversationCard key={c.id} convo={c} />
-      ))}
+    <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr_340px] border border-card-border rounded-xl overflow-hidden lg:h-[640px]">
+      {/* Left: conversation list */}
+      <div className="lg:h-full overflow-y-auto max-h-[320px] lg:max-h-none border-b lg:border-b-0 lg:border-r border-card-border">
+        <div className="px-4 py-3 border-b border-card-border bg-muted/30 sticky top-0 z-10">
+          <div className="text-sm font-medium">
+            Inbox{" "}
+            <span className="text-muted-foreground font-mono text-xs">
+              ({sorted.length})
+            </span>
+          </div>
+        </div>
+        {sorted.map((c) => (
+          <InboxRow
+            key={c.id}
+            convo={c}
+            bookings={bookings}
+            active={c.id === selected?.id}
+            onClick={() => setSelectedId(c.id)}
+          />
+        ))}
+      </div>
+
+      {/* Middle: selected conversation thread + reply/draft actions */}
+      <div className="lg:h-full overflow-y-auto border-b lg:border-b-0 lg:border-r border-card-border bg-background">
+        {selected ? (
+          <ConversationCard convo={selected} />
+        ) : (
+          <div className="p-10 text-center text-sm text-muted-foreground">
+            Select a conversation.
+          </div>
+        )}
+      </div>
+
+      {/* Right: booking details */}
+      <div className="lg:h-full overflow-y-auto">
+        {selected ? (
+          <BookingDetailsPanel convo={selected} bookings={bookings} />
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -2020,9 +2235,9 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
   }
 
   return (
-    <div className="border rounded-xl overflow-hidden">
+    <div className="flex flex-col min-h-full">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-muted/30 border-b">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-muted/30 border-b border-card-border">
         <div className="min-w-0">
           <div className="font-medium text-sm truncate">
             {convo.guestName || convo.guestEmail || "Peerspace guest"}
@@ -2061,7 +2276,7 @@ function ConversationCard({ convo }: { convo: AgentConversation }) {
       )}
 
       {/* Thread */}
-      <div className="px-4 py-3 space-y-3 max-h-[320px] overflow-y-auto">
+      <div className="px-4 py-3 space-y-3 flex-1">
         {convo.messages.map((m) => {
           const inbound = m.direction === "inbound";
           return (

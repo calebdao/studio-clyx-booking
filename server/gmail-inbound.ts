@@ -5,7 +5,6 @@ import {
   agentAutoSendInstructions,
   agentEnabled,
   deliverReply,
-  generateDraftForConversation,
 } from "./agent";
 import {
   EVENT_SECURITY_NOTE,
@@ -376,7 +375,7 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
       ? cleaned.slice(0, MAX_BODY_CHARS) + "\n…[truncated]"
       : cleaned;
 
-  const { conversation, message, duplicate } = await storage.recordInboundEmail({
+  const { duplicate } = await storage.recordInboundEmail({
     threadToken,
     peerspaceReplyTo: replyAddress, // where to send replies (latest wins)
     guestName: from.name,
@@ -393,15 +392,11 @@ async function ingestRawEmail(source: Buffer): Promise<void> {
 
   if (duplicate) return;
 
-  // Draft sequentially (awaited) — NOT fire-and-forget — so a backlog can't fan
-  // out into many concurrent Claude calls + DB scans and exhaust memory. A draft
-  // failure is logged but must not stop us marking the email read upstream
-  // (generateDraftForConversation records its own error draft internally).
-  try {
-    await generateDraftForConversation(conversation.id, message.id);
-  } catch (e) {
-    console.error("[gmail-inbound] draft generation error:", e);
-  }
+  // No automatic draft: the message is ingested into the inbox, but a reply is
+  // only generated when staff click "Suggest a reply" (which calls
+  // generateDraftForConversation on demand via /api/admin/agent/.../suggest).
+  // This keeps AGENT_ENABLED on for ingestion without spending API credits on
+  // every incoming message.
 }
 
 // Deterministic flow for confirmed-booking emails: identify the studio + start

@@ -561,21 +561,20 @@ export type AgentKnowledgeUpdate = z.infer<typeof agentKnowledgeUpdateSchema>;
 // only (never the repo) because they contain door/lockbox codes. Studio 1 & 2
 // have a 9am–3pm ("day") and an after-hours variant; Studio 3 and Lincoln have a
 // single set.
+// One set of entry instructions per space, sent regardless of booking time —
+// all guests come in the same way. (Studios 1 & 2 previously had a 9am–3pm vs
+// after-hours split; that was collapsed into a single set each.)
 export const BOOKING_INSTRUCTION_KEYS = [
-  "studio-1-day",
-  "studio-1-after",
-  "studio-2-day",
-  "studio-2-after",
+  "studio-1",
+  "studio-2",
   "studio-3",
   "lincoln-apartment",
 ] as const;
 export type BookingInstructionKey = (typeof BOOKING_INSTRUCTION_KEYS)[number];
 
 export const BOOKING_INSTRUCTION_LABELS: Record<BookingInstructionKey, string> = {
-  "studio-1-day": "Studio 1 — 9am–3pm (physical key / lockbox)",
-  "studio-1-after": "Studio 1 — after hours (self-entry link)",
-  "studio-2-day": "Studio 2 — 9am–3pm",
-  "studio-2-after": "Studio 2 — after hours (self-entry link)",
+  "studio-1": "Studio 1 (any time)",
+  "studio-2": "Studio 2 (any time)",
   "studio-3": "Studio 3 (any time)",
   "lincoln-apartment": "Lincoln Apartment (any time)",
 };

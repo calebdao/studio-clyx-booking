@@ -693,10 +693,10 @@ export async function registerRoutes(
       );
       return;
     }
+    // Event/large-group bookings still get the building-security note; booking
+    // TIME no longer affects it (instructions are the same regardless of hour).
     const isEvent =
-      booking.activityId === "event" ||
-      booking.guestCount >= 20 ||
-      (startMinutes != null && (startMinutes < 9 * 60 || startMinutes >= 15 * 60));
+      booking.activityId === "event" || booking.guestCount >= 20;
     const finalText =
       isEvent && studio !== "lincoln-apartment"
         ? tpl.text + EVENT_SECURITY_NOTE

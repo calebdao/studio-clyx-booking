@@ -1,4 +1,5 @@
 import { storage } from "./storage";
+import { BOOKING_INSTRUCTION_KEYS } from "@shared/schema";
 
 // ---------------------------------------------------------------------------
 // Booking-confirmation handling: when Peerspace emails that a guest booked a
@@ -228,37 +229,48 @@ function loadTemplates(): Record<string, string> {
   }
 }
 
+// Resolve the saved text for a (collapsed) instruction key. Studios 1 & 2 used
+// to store separate `-day`/`-after` templates; if the new single key hasn't been
+// saved yet, fall back to the old after-hours text (self-entry — works any time),
+// then the old daytime text, so nothing is lost and no guest is left without
+// instructions during the transition.
+function resolveTemplate(raw: Record<string, string>, key: string): string {
+  const direct = (raw[key] ?? "").trim();
+  if (direct) return raw[key];
+  if (key === "studio-1" || key === "studio-2") {
+    return raw[`${key}-after`] || raw[`${key}-day`] || "";
+  }
+  return raw[key] ?? "";
+}
+
+// Returns exactly the current instruction keys (one per space) with migrated
+// values. Returning only these keys means when the admin saves, the stale
+// `-day`/`-after` entries are dropped from the DB.
 export function getInstructionTemplates(): Record<string, string> {
-  return loadTemplates();
+  const raw = loadTemplates();
+  const out: Record<string, string> = {};
+  for (const key of BOOKING_INSTRUCTION_KEYS) {
+    out[key] = resolveTemplate(raw, key);
+  }
+  return out;
 }
 
 export function saveInstructionTemplates(map: Record<string, string>): void {
   storage.setSetting(SETTING_KEY, JSON.stringify(map));
 }
 
-const DAY_START = 9 * 60; // 9:00 AM
-const DAY_END = 15 * 60; // 3:00 PM
-
-// Choose the exact template for a booking. Studio 1 & 2 depend on the start time
-// (day vs after-hours); Studio 3 & Lincoln have a single set. Returns text=null
-// (with a reason) when we can't resolve it — caller flags for a human.
+// Choose the entry template for a booking. One set per space now — the same
+// instructions go out regardless of the booking's start time, so every guest
+// enters the same way. (`_startMinutes` is kept for call-site compatibility but
+// no longer affects the choice.) Returns text=null (with a reason) when there
+// are no saved instructions for the space — caller flags for a human.
 export function selectInstruction(
   studio: StudioKey,
-  startMinutes: number | null
+  _startMinutes?: number | null
 ): { text: string | null; key: string | null; reason?: string } {
   const all = loadTemplates();
-  const needsTime = studio === "studio-1" || studio === "studio-2";
-  let key: string;
-  if (needsTime) {
-    if (startMinutes == null) {
-      return { text: null, key: null, reason: "couldn't read the booking start time" };
-    }
-    const isDay = startMinutes >= DAY_START && startMinutes < DAY_END;
-    key = `${studio}-${isDay ? "day" : "after"}`;
-  } else {
-    key = studio;
-  }
-  const text = (all[key] ?? "").trim() || null;
+  const key = studio;
+  const text = resolveTemplate(all, key).trim() || null;
   return {
     text,
     key,

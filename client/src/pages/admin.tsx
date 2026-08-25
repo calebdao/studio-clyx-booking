@@ -2298,10 +2298,10 @@ function InstructionsTab() {
       <div>
         <h2 className="text-sm font-semibold">Booking access instructions</h2>
         <p className="text-xs text-muted-foreground max-w-2xl mt-0.5">
-          The exact entry instructions sent to a guest when they book. Studio 1 &amp; 2
-          have a 9am–3pm and an after-hours version (chosen by booking start time);
-          Studio 3 and Lincoln have one each. These are stored privately in the
-          database (never in the code), so it's safe to put door codes here.
+          The exact entry instructions sent to a guest when they book — one set per
+          space, sent regardless of the booking time so every guest enters the same
+          way. These are stored privately in the database (never in the code), so
+          it's safe to put door codes here.
         </p>
       </div>
 

@@ -467,6 +467,16 @@ function AdminConsole() {
                 />
                 <Row label="Guests" value={`${target.guestCount}`} />
                 {target.alcohol && <Row label="Alcohol" value="Yes (+$50)" />}
+                {target.activityNote && (
+                  <Row
+                    label="Their plans"
+                    value={
+                      <span className="text-xs whitespace-pre-wrap">
+                        {target.activityNote}
+                      </span>
+                    }
+                  />
+                )}
                 {target.addons.length > 0 && (
                   <Row
                     label="Add-ons"
@@ -795,6 +805,14 @@ function BookingRow({
             <AlertTriangle className="w-3 h-3" />
             awaiting payment
           </span>
+        )}
+        {/* What the guest said they're doing — w-full drops it onto its own
+            line inside the wrapping badge row. Read it before confirming: it's
+            how a party booked as a Production gets caught. */}
+        {booking.activityNote && (
+          <p className="w-full text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap border-l-2 border-card-border pl-2.5">
+            {booking.activityNote}
+          </p>
         )}
       </div>
 

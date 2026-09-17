@@ -47,6 +47,7 @@ export type CreateHoldClientInput = {
   end: string;
   guest: Booking["guest"];
   guestCount: number;
+  activityNote: string;
   alcohol: boolean;
   addons: { addOnId: string; quantity: number }[];
   paymentMethod: PaymentMethod;

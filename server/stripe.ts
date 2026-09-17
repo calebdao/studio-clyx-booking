@@ -219,6 +219,7 @@ export interface CardBookingDraft {
     phone?: string;
   };
   guestCount: number;
+  activityNote?: string | null;
   alcohol: boolean;
   addons: SelectedAddOn[];
   baseTotal: number; // dollars (no card fee), already promo-discounted
@@ -344,6 +345,9 @@ function encodeDraftMetadata(draft: CardBookingDraft, cardFeeAmount: number) {
     guestEmail: draft.guest.email.slice(0, 200),
     guestPhone: (draft.guest.phone ?? "").slice(0, 40),
     guestCount: String(draft.guestCount),
+    // Zod caps this at ACTIVITY_NOTE_MAX (500) = Stripe's per-value limit, so
+    // the slice is belt-and-braces and can't truncate a valid note.
+    activityNote: (draft.activityNote ?? "").slice(0, 500),
     alcohol: draft.alcohol ? "1" : "0",
     ...encodeAddonsMetadata(draft.addons),
     baseTotal: draft.baseTotal.toFixed(2),
@@ -365,6 +369,7 @@ export interface DecodedDraftMetadata {
     phone?: string;
   };
   guestCount: number;
+  activityNote?: string | null;
   alcohol: boolean;
   addons: Array<{ addOnId: string; quantity: number }>;
   baseTotal: number;
@@ -390,6 +395,8 @@ export function decodeDraftMetadata(
         phone: metadata.guestPhone || undefined,
       },
       guestCount: Number(metadata.guestCount) || 1,
+      // Absent on PaymentIntents created before this field existed.
+      activityNote: metadata.activityNote || null,
       alcohol: metadata.alcohol === "1",
       addons: decodeAddonsMetadata(metadata),
       baseTotal: Number(metadata.baseTotal) || 0,

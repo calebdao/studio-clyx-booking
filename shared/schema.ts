@@ -31,6 +31,9 @@ export const bookings = sqliteTable("bookings", {
   guestEmail: text("guest_email").notNull(),
   guestPhone: text("guest_phone"),
   guestCount: integer("guest_count").notNull().default(1),
+  // Free-text "what are you planning?" the guest writes at booking time.
+  // Nullable: rows created before this field existed don't have one.
+  activityNote: text("activity_note"),
   alcohol: integer("alcohol", { mode: "boolean" }).notNull().default(false),
   addons: text("addons"), // JSON-encoded SelectedAddOn[]
   holdExpiresAt: integer("hold_expires_at"), // epoch ms
@@ -140,6 +143,13 @@ export const GUEST_TIER_25_RATE = 10; // 16–25 guests, $/hr
 export const GUEST_TIER_40_RATE = 20; // 26–40 guests, $/hr
 export const EVENT_CLEANING_FEE = 75;
 export const ALCOHOL_FEE = 50;
+
+// "What are you planning?" free-text limits. The max is 500 because card
+// bookings carry this through Stripe PaymentIntent metadata, where each value
+// is capped at 500 chars — keeping it under that avoids the chunk-and-reassemble
+// dance the add-ons need (see server/stripe.ts encodeAddonsMetadata).
+export const ACTIVITY_NOTE_MIN = 25;
+export const ACTIVITY_NOTE_MAX = 500;
 
 // Stripe domestic-card fees (US): 2.9% + $0.30 per successful charge.
 // We gross up so the customer absorbs the fee and the merchant nets the
@@ -356,6 +366,8 @@ export const bookingDtoSchema = z.object({
     phone: z.string().optional(),
   }),
   guestCount: z.number().int().min(1).max(GUEST_MAX),
+  // Optional on the DTO (legacy rows predate the field), required on create.
+  activityNote: z.string().optional(),
   alcohol: z.boolean(),
   addons: z.array(selectedAddOnSchema).default([]),
   holdExpiresAt: z.number().optional(),
@@ -386,6 +398,16 @@ export const createHoldSchema = z.object({
     phone: z.string().optional(),
   }),
   guestCount: z.number().int().min(GUEST_MIN).max(GUEST_MAX),
+  // Required: the guest must tell us what the space is for. Enforced here so a
+  // booking can't skip it by posting straight to the API.
+  activityNote: z
+    .string()
+    .trim()
+    .min(
+      ACTIVITY_NOTE_MIN,
+      `Please tell us a bit more about what you're planning (at least ${ACTIVITY_NOTE_MIN} characters).`
+    )
+    .max(ACTIVITY_NOTE_MAX, `Please keep this under ${ACTIVITY_NOTE_MAX} characters.`),
   alcohol: z.boolean().default(false),
   addons: z
     .array(

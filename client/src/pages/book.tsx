@@ -8,6 +8,8 @@ import {
 } from "@shared/schema";
 import {
   ACTIVITIES,
+  ACTIVITY_NOTE_MAX,
+  ACTIVITY_NOTE_MIN,
   ActivityId,
   AddOnCatalogItem,
   Booking,
@@ -32,6 +34,7 @@ import { Scheduler } from "@/components/scheduler";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -88,6 +91,8 @@ export default function BookPage() {
   const [selection, setSelection] = useState<{ start: Date; end: Date } | null>(null);
 
   const [guestCount, setGuestCount] = useState<number>(1);
+  const [activityNote, setActivityNote] = useState("");
+  const [activityNoteTouched, setActivityNoteTouched] = useState(false);
   const [alcohol, setAlcohol] = useState<boolean>(false);
   // selected add-ons keyed by catalog id → quantity
   const [addonQty, setAddonQty] = useState<Record<string, number>>({});
@@ -167,6 +172,10 @@ export default function BookPage() {
   const phoneValid = phone.replace(/\D/g, "").length >= 7;
   const guestValid = !!(first.trim() && last.trim() && emailValid && phoneValid);
   const guestCountValid = Number.isInteger(guestCount) && guestCount >= GUEST_MIN && guestCount <= GUEST_MAX;
+  // "What are you planning?" — mirrors the server's createHoldSchema bounds.
+  const activityNoteLength = activityNote.trim().length;
+  const activityNoteValid =
+    activityNoteLength >= ACTIVITY_NOTE_MIN && activityNoteLength <= ACTIVITY_NOTE_MAX;
 
   // Per-field error text: shown once the guest has touched a field or tried to book.
   const firstError =
@@ -185,6 +194,14 @@ export default function BookPage() {
       : (phoneTouched || attemptedBook) && !phoneValid
       ? "Enter a valid phone number."
       : undefined;
+  const activityNoteError =
+    (activityNoteTouched || attemptedBook) && activityNoteLength === 0
+      ? "Please tell us what you're planning."
+      : (activityNoteTouched || attemptedBook) && activityNoteLength < ACTIVITY_NOTE_MIN
+      ? `A little more detail, please — at least ${ACTIVITY_NOTE_MIN} characters.`
+      : activityNoteLength > ACTIVITY_NOTE_MAX
+      ? `Please keep this under ${ACTIVITY_NOTE_MAX} characters.`
+      : undefined;
 
   // Summary of what's still missing, shown as a warning right by the Book now
   // button so the guest doesn't have to scroll up to find the offending field.
@@ -194,6 +211,7 @@ export default function BookPage() {
   if (!emailValid) missingRequired.push(email.trim() ? "A valid email" : "Email");
   if (!phoneValid) missingRequired.push(phone.trim() ? "A valid phone number" : "Phone number");
   if (!guestCountValid) missingRequired.push("Guest count");
+  if (!activityNoteValid) missingRequired.push("What you're planning");
 
   function setAddonQuantity(item: AddOnCatalogItem, qty: number) {
     setAddonQty((prev) => {
@@ -208,7 +226,7 @@ export default function BookPage() {
   async function handleBookNow() {
     // Surface every missing required field (red * + inline message) if they try
     // to book with something incomplete.
-    if (!guestValid || !guestCountValid) {
+    if (!guestValid || !guestCountValid || !activityNoteValid) {
       setAttemptedBook(true);
       return;
     }
@@ -226,6 +244,7 @@ export default function BookPage() {
           phone: phone.trim() || undefined,
         },
         guestCount,
+        activityNote: activityNote.trim(),
         alcohol,
         addons: selectedAddOns.map((a) => ({ addOnId: a.addOnId, quantity: a.quantity })),
         paymentMethod,
@@ -575,6 +594,53 @@ export default function BookPage() {
                   <span>Alcohol will be consumed.</span>
                 </label>
               </Field>
+            </div>
+
+            {/* What are you planning? Required free text. Catches bookings filed
+                under the wrong activity and tells us how to prep the room. */}
+            <div className="mt-4">
+              <Field
+                label="What are you planning?"
+                required
+                error={activityNoteError}
+              >
+                <Textarea
+                  value={activityNote}
+                  onChange={(e) => setActivityNote(e.target.value)}
+                  onBlur={() => setActivityNoteTouched(true)}
+                  rows={3}
+                  maxLength={ACTIVITY_NOTE_MAX}
+                  placeholder="e.g. Brand photoshoot for a skincare line — 6 crew, one stylist, ring lights and a small backdrop. No catering, no music."
+                  aria-invalid={!!activityNoteError}
+                  className={cn(
+                    "resize-y min-h-[76px]",
+                    activityNoteError ? "border-destructive" : undefined
+                  )}
+                  data-testid="input-activity-note"
+                />
+              </Field>
+              <div className="mt-1.5 flex items-start justify-between gap-3">
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Tell us the type of activity, how many people, and anything you're
+                  bringing in — equipment, catering, music. This helps us confirm the
+                  right rate and have the space ready for you.
+                </p>
+                {/* Under the minimum, count down to it — that's the gate the
+                    guest is actually trying to clear. Only switch to the max
+                    counter once they're past it. */}
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-[11px] tabular-nums",
+                    activityNoteLength > ACTIVITY_NOTE_MAX - 50
+                      ? "text-destructive"
+                      : "text-muted-foreground"
+                  )}
+                >
+                  {activityNoteLength < ACTIVITY_NOTE_MIN
+                    ? `${ACTIVITY_NOTE_MIN - activityNoteLength} more`
+                    : `${activityNoteLength}/${ACTIVITY_NOTE_MAX}`}
+                </span>
+              </div>
             </div>
           </Section>
 
@@ -1168,6 +1234,16 @@ export default function BookPage() {
               />
               {heldBooking.alcohol && (
                 <ConfirmRow label="Alcohol" value="Yes (+$50)" />
+              )}
+              {heldBooking.activityNote && (
+                <ConfirmRow
+                  label="Your plans"
+                  value={
+                    <span className="text-xs whitespace-pre-wrap">
+                      {heldBooking.activityNote}
+                    </span>
+                  }
+                />
               )}
               {heldBooking.addons.length > 0 && (
                 <ConfirmRow

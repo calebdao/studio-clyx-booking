@@ -81,6 +81,9 @@ export interface Booking {
     phone?: string;
   };
   guestCount: number;
+  // What the guest said they're using the space for. Optional on the type
+  // because bookings made before this field existed don't have one.
+  activityNote?: string;
   alcohol: boolean;
   addons: SelectedAddOn[];
   // For held bookings: epoch ms when the hold expires
@@ -147,9 +150,28 @@ export const SPACES: Space[] = [
 ];
 
 export const ACTIVITIES: Activity[] = [
-  { id: "production", name: "Production", rate: 60, description: "Photo, video, and recording sessions." },
-  { id: "meeting", name: "Meeting", rate: 80, description: "Workshops, casting, client meetings." },
-  { id: "event", name: "Event", rate: 80, description: "Receptions, screenings, private gatherings." },
+  // Descriptions are written as "who is in the room", not industry jargon —
+  // guests were filing events under Production because a launch party with a
+  // photographer reads as both. The dividing line is guests vs. crew only.
+  {
+    id: "production",
+    name: "Production",
+    rate: 60,
+    description: "Photo, video, or recording. Crew only — no guests or audience.",
+  },
+  {
+    id: "meeting",
+    name: "Meeting",
+    rate: 80,
+    description: "Workshop, casting, client session, or team offsite.",
+  },
+  {
+    id: "event",
+    name: "Event",
+    rate: 80,
+    description:
+      "Anyone attending who isn't crew — party, launch, screening, reception, shower.",
+  },
 ];
 
 // Booking rules
@@ -167,6 +189,12 @@ export const GUEST_TIER_25_RATE = 10;
 export const GUEST_TIER_40_RATE = 20;
 export const EVENT_CLEANING_FEE = 75;
 export const ALCOHOL_FEE = 50;
+
+// "What are you planning?" length bounds — must mirror shared/schema.ts.
+// (Imported by value rather than from @shared/schema so the client bundle
+// doesn't pull in drizzle.) The server rejects anything outside these.
+export const ACTIVITY_NOTE_MIN = 25;
+export const ACTIVITY_NOTE_MAX = 500;
 
 // Stripe card-fee constants. Kept in sync with shared/schema.ts. Used for the
 // live preview the customer sees when they pick "credit card". Server is still

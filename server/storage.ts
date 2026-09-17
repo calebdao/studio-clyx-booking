@@ -77,6 +77,7 @@ sqlite.exec(`
     guest_email TEXT NOT NULL,
     guest_phone TEXT,
     guest_count INTEGER NOT NULL DEFAULT 1,
+    activity_note TEXT,
     alcohol INTEGER NOT NULL DEFAULT 0,
     addons TEXT,
     hold_expires_at INTEGER,
@@ -222,6 +223,7 @@ function ensureBookingColumn(name: string, ddl: string) {
   }
 }
 ensureBookingColumn("guest_count", "guest_count INTEGER NOT NULL DEFAULT 1");
+ensureBookingColumn("activity_note", "activity_note TEXT");
 ensureBookingColumn("alcohol", "alcohol INTEGER NOT NULL DEFAULT 0");
 ensureBookingColumn("addons", "addons TEXT");
 ensureBookingColumn("hold_active", "hold_active INTEGER NOT NULL DEFAULT 1");
@@ -280,6 +282,7 @@ function rowToDto(r: BookingRow): BookingDto {
       phone: r.guestPhone ?? undefined,
     },
     guestCount: r.guestCount ?? 1,
+    activityNote: r.activityNote ?? undefined,
     alcohol: Boolean(r.alcohol),
     addons: safeParseAddons(r.addons),
     holdExpiresAt: r.holdExpiresAt ?? undefined,
@@ -473,6 +476,7 @@ export interface IStorage {
     end: string;
     guest: BookingDto["guest"];
     guestCount: number;
+    activityNote?: string | null;
     alcohol: boolean;
     addons: Array<{ addOnId: string; quantity: number }>;
     cardFeeAmount: number;
@@ -713,6 +717,7 @@ export class DatabaseStorage implements IStorage {
       guestEmail: input.guest.email,
       guestPhone: input.guest.phone ?? null,
       guestCount: input.guestCount,
+      activityNote: input.activityNote,
       alcohol: input.alcohol ?? false,
       addons: JSON.stringify(resolvedAddons),
       holdExpiresAt: now + HOLD_DURATION_MINUTES * 60 * 1000,
@@ -855,6 +860,7 @@ export class DatabaseStorage implements IStorage {
     end: string;
     guest: BookingDto["guest"];
     guestCount: number;
+    activityNote?: string | null;
     alcohol: boolean;
     addons: Array<{ addOnId: string; quantity: number }>;
     cardFeeAmount: number;
@@ -971,6 +977,7 @@ export class DatabaseStorage implements IStorage {
       guestEmail: args.guest.email,
       guestPhone: args.guest.phone ?? null,
       guestCount: args.guestCount,
+      activityNote: args.activityNote ?? null,
       alcohol: args.alcohol,
       addons: JSON.stringify(resolvedAddons),
       holdExpiresAt: null,

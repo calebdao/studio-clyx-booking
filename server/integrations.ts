@@ -851,6 +851,9 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
     `Start:         ${startLabel}`,
     `End:           ${endLabel}`,
     `Duration:      ${durationHours} hour${durationHours === 1 ? "" : "s"}`,
+    ...(booking.activityNote
+      ? ["", "What they're planning:", booking.activityNote]
+      : []),
     "",
     "Price breakdown:",
     ...formatPriceLinesText(pricing),
@@ -913,6 +916,16 @@ export function buildOwnerBookingAlertEmail(booking: BookingDto) {
             ${row("Duration", `${durationHours} hour${durationHours === 1 ? "" : "s"}`)}
             ${row("Total", totalLabel)}
           </table>
+          ${
+            booking.activityNote
+              ? `<div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+            <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">What they're planning</div>
+            <p style="margin:8px 0 0 0;font-size:14px;line-height:1.55;white-space:pre-wrap;">${escapeHtml(
+              booking.activityNote
+            )}</p>
+          </div>`
+              : ""
+          }
           <div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
             <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">Price breakdown</div>
             <div style="margin-top:8px;">${formatPriceLinesHtml(pricing)}</div>

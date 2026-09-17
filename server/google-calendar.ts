@@ -288,6 +288,9 @@ function eventBodyForBooking(
       `Activity: ${activity}`,
       `Guests: ${booking.guestCount}`,
       booking.alcohol ? "Alcohol: yes" : null,
+      // What the guest said they're doing — the fastest way to spot a booking
+      // filed under the wrong activity (e.g. a party booked as a production).
+      booking.activityNote ? `\nWhat they're planning:\n${booking.activityNote}\n` : null,
       booking.addons && booking.addons.length > 0
         ? `Add-ons: ${booking.addons
             .map((a) =>

@@ -559,6 +559,7 @@ export async function registerRoutes(
             phone: input.guest.phone,
           },
           guestCount: input.guestCount,
+          activityNote: input.activityNote,
           alcohol: input.alcohol,
           addons: resolvedAddons,
           baseTotal,
@@ -585,6 +586,7 @@ export async function registerRoutes(
             phone: input.guest.phone,
           },
           guestCount: input.guestCount,
+          activityNote: input.activityNote,
           alcohol: input.alcohol,
           addons: resolvedAddons,
           // No holdExpiresAt / holdActive — the dialog hides the timer entirely
@@ -1035,6 +1037,7 @@ export async function registerRoutes(
               end: draft.end,
               guest: draft.guest,
               guestCount: draft.guestCount,
+              activityNote: draft.activityNote ?? null,
               alcohol: draft.alcohol,
               addons: draft.addons,
               cardFeeAmount: draft.cardFeeAmount,

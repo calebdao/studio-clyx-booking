@@ -51,6 +51,12 @@ RESEND_API_KEY=<secret>
 RESEND_FROM_ADDRESS=Studio Clyx <info@studioclyx.com>
 OWNER_ALERT_EMAILS=calebdao@gmail.com,<gladys email>
 OWNER_REMINDER_EMAIL=info@calebgladys.com
+# Copy of guest entry instructions (website bookings). Optional — falls back to
+# OWNER_ALERT_EMAILS when unset.
+INSTRUCTIONS_COPY_EMAILS=<comma-separated>
+# Owner-only PIN for the admin Insights tab. Separate from ADMIN_PIN so staff can
+# have admin access without analytics. Fails CLOSED — unset means locked for all.
+INSIGHTS_PIN=<secret>
 
 GOOGLE_SERVICE_ACCOUNT_JSON=<full service account JSON>
 GOOGLE_CALENDAR_ID_STUDIO_1=info@calebgladys.com

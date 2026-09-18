@@ -23,6 +23,7 @@ import {
   removeCalendarEvent,
   sendConfirmationEmail,
   sendEntryInstructionsEmail,
+  SPACE_LABELS,
   sendOwnerBookingAlert,
   startHoldExpirySweeper,
 } from "./integrations";
@@ -729,6 +730,17 @@ export async function registerRoutes(
         to: booking.guest.email,
         bookingId: booking.id,
         text: finalText,
+        // Gives the owners' copy a scannable subject line.
+        summary: `${SPACE_LABELS[booking.spaceId] ?? booking.spaceId} · ${new Date(
+          booking.start
+        ).toLocaleString("en-US", {
+          timeZone: "America/New_York",
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })}`,
       });
       console.log(
         r.ok

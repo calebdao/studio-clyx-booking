@@ -182,7 +182,7 @@ void calendarIdForSpace; // re-exported elsewhere; keep referenced to dodge lint
 
 // Display labels — kept here so the email body matches the public site copy
 // without importing client-only files in the server bundle.
-const SPACE_LABELS: Record<BookingDto["spaceId"], string> = {
+export const SPACE_LABELS: Record<BookingDto["spaceId"], string> = {
   "studio-1": "Studio 1",
   "studio-2": "Studio 2",
   "studio-3": "Studio 3",
@@ -225,6 +225,18 @@ function getOwnerAlertRecipients() {
     .split(",")
     .map((email) => email.trim())
     .filter(Boolean);
+}
+
+// Who gets a copy of the entry instructions sent to a guest, so the owners hold
+// the same door/lockbox text the guest received. Falls back to the owner alert
+// list, so this works without new configuration; set INSTRUCTIONS_COPY_EMAILS to
+// use a different set. Addresses are never hardcoded — this repo is public.
+function getInstructionsCopyRecipients() {
+  const explicit = (process.env.INSTRUCTIONS_COPY_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim())
+    .filter(Boolean);
+  return explicit.length > 0 ? explicit : getOwnerAlertRecipients();
 }
 
 // Alert the operator that the email bot hit a question it wasn't confident
@@ -804,11 +816,13 @@ export async function sendEntryInstructionsEmail(args: {
   to: string;
   bookingId: string;
   text: string;
+  /** Short "Studio 2 · Fri, Oct 3 · 6:00 PM" line for the owners' copy. */
+  summary?: string;
 }) {
   const html =
     `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;white-space:pre-wrap;">` +
     `${escapeHtml(args.text)}</div>`;
-  return sendResendEmail({
+  const result = await sendResendEmail({
     to: args.to,
     subject: "Studio Clyx — your booking & entry instructions",
     text: args.text,
@@ -816,6 +830,48 @@ export async function sendEntryInstructionsEmail(args: {
     label: "entry instructions",
     bookingId: args.bookingId,
   });
+
+  // Copy the owners on exactly what the guest received. Sent as its own email
+  // rather than a Bcc so it can carry the booking context — a bare copy of the
+  // template says nothing about which guest or space it was for.
+  // Deliberately best-effort and AFTER the guest send: a failure here must never
+  // affect whether the guest got their door code.
+  try {
+    const copyTo = getInstructionsCopyRecipients();
+    if (copyTo.length > 0) {
+      const header = [
+        `Copy of the entry instructions just sent to ${args.to}.`,
+        args.summary ? `Booking: ${args.summary}` : null,
+        `Booking ID: ${args.bookingId}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const copyText = `${header}\n\n${"-".repeat(48)}\n\n${args.text}`;
+      const copyHtml =
+        `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#7A7974;white-space:pre-wrap;">` +
+        `${escapeHtml(header)}</div>` +
+        `<hr style="border:0;border-top:1px solid #D4D1CA;margin:16px 0;" />` +
+        `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;white-space:pre-wrap;">` +
+        `${escapeHtml(args.text)}</div>`;
+      await sendResendEmail({
+        to: copyTo,
+        subject: `Copy — entry instructions sent to ${args.to}${
+          args.summary ? ` (${args.summary})` : ""
+        }`,
+        text: copyText,
+        html: copyHtml,
+        label: "entry instructions owner copy",
+        bookingId: args.bookingId,
+      });
+    }
+  } catch (e) {
+    console.error(
+      `[integrations] entry-instructions owner copy failed for ${args.bookingId}:`,
+      e
+    );
+  }
+
+  return result;
 }
 
 export function buildOwnerBookingAlertEmail(booking: BookingDto) {

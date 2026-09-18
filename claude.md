@@ -195,19 +195,19 @@ Important caveat: SQLite on Render’s filesystem is not ideal long-term. The ne
 
 ## Known deployment gotchas
 
-- Render Free web services spin down and can take ~50–60 seconds to cold start. A paid Render instance avoids this.
+- The web service runs on a **paid Starter instance** ($7/mo, 0.5 CPU / 512 MB) as
+  of 2026-09-18, so it does **not** spin down — there is no cold start. (Render
+  Free instances sleep after ~15 min idle and take ~50–60s to wake; that applied
+  to this service historically but no longer does. Build-pipeline billing is
+  separate from the runtime instance type and has no bearing on spin-down.)
 - Render env var names must match exactly; for example `ADMIN_PIN`, not `admin`.
 - After editing Render env vars, use Manual Deploy → Deploy latest commit. A simple restart may not pick up all intended changes.
 - If uploading files through GitHub web UI, upload the extracted project contents into the repo root so `package.json` remains at the top level.
-- The app was embedded in Squarespace using an iframe:
-
-```html
-<iframe
-  src="https://studio-clyx-booking.onrender.com"
-  style="width:100%; min-height:1300px; border:0; display:block;"
-  loading="lazy"
-></iframe>
-```
+- The app is embedded in Squarespace using an iframe. The embed now syncs its
+  height via `postMessage` instead of hardcoding `min-height:1300px` (which gave
+  the frame an inner scrollbar on mobile). **See `EMBEDDING.md`** for both halves
+  — the Squarespace-side snippet lives in the Squarespace editor and is not
+  version-controlled, so that file is the only record of it.
 
 ## Important history
 

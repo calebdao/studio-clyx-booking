@@ -9,6 +9,7 @@ import BookPage from "@/pages/book";
 import AdminPage from "@/pages/admin";
 import { Shell } from "@/components/shell";
 import { AdminProvider, BookingProvider } from "@/lib/booking-store";
+import { useEmbedHeightReporter } from "@/hooks/use-embed-height";
 
 function AppRouter() {
   return (
@@ -23,6 +24,9 @@ function AppRouter() {
 }
 
 function App() {
+  // Keeps the Squarespace iframe sized to our content. No-op when not embedded.
+  useEmbedHeightReporter();
+
   return (
     <QueryClientProvider client={queryClient}>
       <AdminProvider>

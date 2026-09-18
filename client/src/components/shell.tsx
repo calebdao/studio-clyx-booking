@@ -4,9 +4,14 @@ import { Sun, Moon, Eye } from "lucide-react";
 import { ClyxLogo } from "@/components/clyx-logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { isEmbedded } from "@/lib/embed-height";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
+  // Inside an iframe, `dvh` resolves to the iframe's own height — so a
+  // min-h-dvh floor would pin our measured height to whatever we last told the
+  // parent, and the frame could never shrink back down. Standalone keeps it.
+  const [embedded] = useState(isEmbedded);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -19,7 +24,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const isAdmin = location.startsWith("/admin");
 
   return (
-    <div className="min-h-dvh flex flex-col bg-background">
+    <div className={cn("flex flex-col bg-background", !embedded && "min-h-dvh")}>
       <header className="sticky top-0 z-30 border-b border-card-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="max-w-[1280px] mx-auto px-5 lg:px-8 h-14 flex items-center justify-between gap-4">
           <Link href="/" className="flex items-center" data-testid="link-home">

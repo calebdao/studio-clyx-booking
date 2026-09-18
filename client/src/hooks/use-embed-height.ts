@@ -3,6 +3,8 @@ import {
   ALLOWED_PARENT_ORIGINS,
   EMBED_HEIGHT_MESSAGE,
   EMBED_HEIGHT_REQUEST,
+  EMBED_VIEWPORT_MESSAGE,
+  EMBEDDED_CLASS,
   isEmbedded,
 } from "@/lib/embed-height";
 
@@ -54,10 +56,30 @@ export function useEmbedHeightReporter() {
     // parent window being resized while our own height didn't change.
     const onMessage = (event: MessageEvent) => {
       if (!ALLOWED_PARENT_ORIGINS.includes(event.origin)) return;
-      if ((event.data as { type?: string } | null)?.type !== EMBED_HEIGHT_REQUEST)
+      const data = event.data as
+        | { type?: string; top?: number; height?: number }
+        | null;
+      if (!data) return;
+
+      if (data.type === EMBED_HEIGHT_REQUEST) {
+        lastSent = -1; // force a resend even if the height is unchanged
+        schedule();
         return;
-      lastSent = -1; // force a resend even if the height is unchanged
-      schedule();
+      }
+
+      // Publish the parent's visible slice as CSS variables. index.css uses
+      // these to pin dialogs and toasts to what the visitor can actually see;
+      // see EMBED_VIEWPORT_MESSAGE for why fixed positioning can't do it alone.
+      if (data.type === EMBED_VIEWPORT_MESSAGE) {
+        const top = Number(data.top);
+        const height = Number(data.height);
+        if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0)
+          return;
+        const root = document.documentElement;
+        root.style.setProperty("--clyx-vp-top", `${Math.round(top)}px`);
+        root.style.setProperty("--clyx-vp-height", `${Math.round(height)}px`);
+        root.classList.add(EMBEDDED_CLASS);
+      }
     };
     window.addEventListener("message", onMessage);
 

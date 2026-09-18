@@ -23,6 +23,19 @@ export const ALLOWED_PARENT_ORIGINS = [
 export const EMBED_HEIGHT_MESSAGE = "clyx-embed-height";
 export const EMBED_HEIGHT_REQUEST = "clyx-request-height";
 
+// Parent -> child: which slice of our (very tall) document is actually on the
+// visitor's screen right now. `position: fixed` inside an iframe resolves
+// against the IFRAME's viewport, which since the height-sync change is the
+// entire multi-thousand-pixel document -- so a centered dialog lands in the
+// middle of the whole frame, usually far off-screen, while its overlay greys
+// out everything. These coordinates let us pin dialogs to the visible slice.
+export const EMBED_VIEWPORT_MESSAGE = "clyx-viewport";
+
+// Set on <html> once the parent starts sending viewport coordinates. Gating the
+// CSS on this class means an un-updated parent snippet (no viewport messages)
+// simply keeps the old centering rather than breaking.
+export const EMBEDDED_CLASS = "clyx-embedded";
+
 /** True when this document is running inside a frame. */
 export function isEmbedded(): boolean {
   if (typeof window === "undefined") return false;

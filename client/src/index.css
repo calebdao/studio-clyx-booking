@@ -271,3 +271,40 @@
     );
   }
 }
+
+/* ----- Embedded (iframe) overlay positioning -----
+   The Squarespace embed sizes the iframe to our full content height, so the
+   iframe never scrolls internally and `position: fixed` resolves against a
+   viewport thousands of pixels tall. A dialog centered with top:50% therefore
+   lands in the middle of the whole document -- frequently far outside what the
+   visitor can see -- while its overlay greys out the entire frame, which reads
+   as "the page broke."
+
+   The parent posts the coordinates of the slice it's actually showing and
+   use-embed-height.ts publishes them as --clyx-vp-top / --clyx-vp-height. These
+   rules re-anchor overlays to that slice, so a dialog always opens in front of
+   the visitor no matter where in the add-on list they clicked.
+
+   Scoped to html.clyx-embedded, which is only set once real viewport messages
+   arrive -- a parent page running the older snippet keeps the previous
+   behaviour instead of breaking. Specificity (0,2,1) beats the Tailwind
+   utilities it overrides, so no !important is needed. */
+html.clyx-embedded .clyx-embed-overlay {
+  top: var(--clyx-vp-top, 0px);
+  height: var(--clyx-vp-height, 100dvh);
+  bottom: auto;
+}
+
+html.clyx-embedded .clyx-embed-dialog {
+  top: calc(var(--clyx-vp-top, 0px) + var(--clyx-vp-height, 100dvh) / 2);
+  /* Never taller than the visible slice, so a long add-on description stays
+     readable and closable rather than overflowing past the screen edges. */
+  max-height: calc(var(--clyx-vp-height, 100dvh) - 2rem);
+  overflow-y: auto;
+}
+
+html.clyx-embedded .clyx-embed-toasts {
+  top: calc(var(--clyx-vp-top, 0px) + var(--clyx-vp-height, 100dvh));
+  bottom: auto;
+  transform: translateY(-100%);
+}

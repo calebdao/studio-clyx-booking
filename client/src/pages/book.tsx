@@ -50,7 +50,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin, Minus, Plus, Users, Wine, ShoppingBag, CreditCard, Banknote, Moon } from "lucide-react";
+import { Copy, Check, ArrowRight, Mail, Phone, User, Tag, MapPin, Minus, Plus, Users, Wine, ShoppingBag, CreditCard, Banknote, Moon, ChevronDown, ChevronUp } from "lucide-react";
 import {
   fetchStripeIntentForBooking,
   useBookings,
@@ -97,6 +97,10 @@ export default function BookPage() {
   // selected add-ons keyed by catalog id → quantity
   const [addonQty, setAddonQty] = useState<Record<string, number>>({});
   const [addonCategory, setAddonCategory] = useState<string>("all");
+  // The catalog runs to ~74 image cards. Left open it stacks thousands of
+  // pixels of equipment between a phone guest and the Book now button, which
+  // most guests don't want at all — so it starts collapsed behind one tap.
+  const [addonsOpen, setAddonsOpen] = useState(false);
   // Add-on whose full details are shown in a popup (null = closed).
   const [addonDetails, setAddonDetails] = useState<AddOnCatalogItem | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("zelle");
@@ -157,6 +161,27 @@ export default function BookPage() {
     appliedPromo,
     selection,
   ]);
+
+  // "lighting · camera & video · grip" — the three biggest categories, shown on
+  // the collapsed add-ons row so guests know what's behind it without opening it.
+  const addonCategoryHint = useMemo(() => {
+    if (!addOnCatalog || addOnCatalog.length === 0) return "";
+    const counts = new Map<string, number>();
+    for (const item of addOnCatalog) {
+      const key = item.category ?? "other";
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(
+        ([key]) =>
+          ADDON_CATEGORY_LABELS[key as keyof typeof ADDON_CATEGORY_LABELS] ??
+          "Other"
+      )
+      .join(" · ")
+      .toLowerCase();
+  }, [addOnCatalog]);
 
   // Evaluate the applied promo against the selected session for a status message.
   const promoEval = useMemo(
@@ -654,6 +679,55 @@ export default function BookPage() {
               <div className="text-xs text-muted-foreground">Loading add-ons…</div>
             ) : addOnCatalog.length === 0 ? (
               <div className="text-xs text-muted-foreground">No add-ons available right now.</div>
+            ) : !addonsOpen ? (
+              /* Collapsed: a one-tap entry point, plus whatever is already
+                 selected so it stays visible without the catalog being open. */
+              <div className="space-y-2.5">
+                {selectedAddOns.length > 0 && (
+                  <div className="rounded-md border border-primary/30 bg-primary/5 px-3.5 py-3">
+                    <div className="text-eyebrow text-primary mb-1.5">
+                      {selectedAddOns.length} added
+                    </div>
+                    <ul className="space-y-1">
+                      {selectedAddOns.map((a) => (
+                        <li
+                          key={a.addOnId}
+                          className="flex items-baseline justify-between gap-3 text-xs"
+                        >
+                          <span className="truncate">
+                            {a.priceType === "flat"
+                              ? a.name
+                              : `${a.quantity} × ${a.name}`}
+                          </span>
+                          <span className="shrink-0 font-mono tabular-nums">
+                            {fmtMoney(a.lineTotal)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setAddonsOpen(true)}
+                  data-testid="button-addons-open"
+                  className="w-full flex items-center justify-between gap-3 rounded-md border border-card-border bg-card px-3.5 py-3 text-left transition hover-elevate active-elevate-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium tracking-tight">
+                      {selectedAddOns.length > 0
+                        ? "Edit add-ons"
+                        : "Browse add-ons"}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {addOnCatalog.length} item
+                      {addOnCatalog.length === 1 ? "" : "s"}
+                      {addonCategoryHint ? ` · ${addonCategoryHint}` : ""}
+                    </div>
+                  </div>
+                  <ChevronDown className="w-4 h-4 shrink-0 text-muted-foreground" />
+                </button>
+              </div>
             ) : (
               <>
                 {/* Category tabs — only show categories that actually have items */}
@@ -690,7 +764,9 @@ export default function BookPage() {
                     </div>
                   );
                 })()}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Two columns even on phones — at this catalog size a single
+                    column is thousands of pixels tall on its own. */}
+                <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
                   {addOnCatalog
                     .filter((item) =>
                       addonCategory === "all"
@@ -724,17 +800,19 @@ export default function BookPage() {
                         <img
                           src={item.imageUrl}
                           alt=""
-                          className="w-16 h-16 rounded-sm object-cover flex-shrink-0"
+                          className="w-12 h-12 sm:w-16 sm:h-16 rounded-sm object-cover flex-shrink-0"
                           loading="lazy"
                         />
                       ) : (
-                        <div className="w-16 h-16 rounded-sm bg-muted flex items-center justify-center flex-shrink-0">
+                        <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-sm bg-muted flex items-center justify-center flex-shrink-0">
                           <ShoppingBag className="w-4 h-4 text-muted-foreground" />
                         </div>
                       )}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <div className="font-medium text-sm tracking-tight truncate min-w-0">
+                        {/* Stacked in the narrow mobile column; side-by-side
+                            once there's room for both on one line. */}
+                        <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between sm:gap-2">
+                          <div className="font-medium text-sm tracking-tight line-clamp-2 sm:truncate min-w-0">
                             {item.name}
                           </div>
                           <div className="font-mono text-xs whitespace-nowrap">
@@ -764,6 +842,15 @@ export default function BookPage() {
                   );
                     })}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setAddonsOpen(false)}
+                  data-testid="button-addons-close"
+                  className="mt-3 w-full flex items-center justify-center gap-1.5 rounded-md border border-card-border bg-card px-3 py-2 text-xs font-medium text-muted-foreground transition hover-elevate active-elevate-2"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                  Hide add-ons
+                </button>
               </>
             )}
           </Section>

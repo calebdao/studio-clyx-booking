@@ -461,6 +461,7 @@ export interface IStorage {
     spaceId: BookingDto["spaceId"],
     calendarId: string | null
   ): Promise<void>;
+  setBookingTime(id: string, start: string, end: string): Promise<void>;
   // Stripe
   setStripePaymentIntent(
     id: string,
@@ -839,6 +840,17 @@ export class DatabaseStorage implements IStorage {
   ) {
     db.update(bookings)
       .set({ spaceId, googleCalendarId: calendarId })
+      .where(eq(bookings.id, id))
+      .run();
+  }
+
+  // Re-time a booking to match its Google Calendar event, after an operator
+  // dragged the event to a different slot. Unlike a space change this DOES move
+  // the price (base = activity rate x hours), so callers log the old and new
+  // totals — payment for any extension is collected manually.
+  async setBookingTime(id: string, start: string, end: string) {
+    db.update(bookings)
+      .set({ start, end })
       .where(eq(bookings.id, id))
       .run();
   }

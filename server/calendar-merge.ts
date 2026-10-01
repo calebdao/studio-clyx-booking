@@ -42,11 +42,33 @@ export interface PlannedMove {
   toSpaceId: BookingDto["spaceId"];
 }
 
+export interface PlannedRetime {
+  bookingId: string;
+  fromStart: string;
+  fromEnd: string;
+  toStart: string;
+  toEnd: string;
+}
+
 export interface MergePlan {
   /** Events belonging to no known booking — render these as busy. */
   externals: Array<{ spaceId: BookingDto["spaceId"]; event: CalendarEventLite }>;
   /** Our bookings discovered on another space's calendar. */
   moves: PlannedMove[];
+  /** Our bookings whose event was dragged to a different time. */
+  retimes: PlannedRetime[];
+}
+
+// Google returns times as ISO strings that may differ in format or offset while
+// representing the same instant, so compare epochs with a tolerance rather than
+// comparing strings. Below this, treat the times as unchanged.
+const RETIME_TOLERANCE_MS = 60_000;
+
+function sameInstant(a: string, b: string): boolean {
+  const ta = new Date(a).getTime();
+  const tb = new Date(b).getTime();
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return true; // unparseable: don't act
+  return Math.abs(ta - tb) < RETIME_TOLERANCE_MS;
 }
 
 export function planCalendarMerge(args: {
@@ -65,9 +87,10 @@ export function planCalendarMerge(args: {
 
   const externals: MergePlan["externals"] = [];
   const moves: PlannedMove[] = [];
+  const retimes: PlannedRetime[] = [];
   // An event id can only live on one calendar, but guard anyway so a duplicate
-  // reading can't queue two conflicting re-homes for the same booking.
-  const movedBookingIds = new Set<string>();
+  // reading can't queue two conflicting updates for the same booking.
+  const touchedBookingIds = new Set<string>();
 
   for (const { spaceId, events } of args.eventsBySpace) {
     for (const event of events) {
@@ -76,16 +99,38 @@ export function planCalendarMerge(args: {
         externals.push({ spaceId, event });
         continue;
       }
-      if (owner.spaceId === spaceId) continue; // case 1: ours, where expected
-      if (movedBookingIds.has(owner.id)) continue;
-      movedBookingIds.add(owner.id);
-      moves.push({
-        bookingId: owner.id,
-        fromSpaceId: owner.spaceId,
-        toSpaceId: spaceId,
-      });
+      if (touchedBookingIds.has(owner.id)) continue;
+
+      if (owner.spaceId !== spaceId) {
+        // Case 2: the operator dragged it to another studio's calendar.
+        touchedBookingIds.add(owner.id);
+        moves.push({
+          bookingId: owner.id,
+          fromSpaceId: owner.spaceId,
+          toSpaceId: spaceId,
+        });
+        continue;
+      }
+
+      // Case 1: ours, on the expected calendar. Still check the clock — the
+      // operator may have dragged it to a different time, in which case the row
+      // is stale and would block the OLD slot while leaving the new one
+      // bookable. Duration drives price, so the caller logs the delta.
+      if (
+        !sameInstant(owner.start, event.start) ||
+        !sameInstant(owner.end, event.end)
+      ) {
+        touchedBookingIds.add(owner.id);
+        retimes.push({
+          bookingId: owner.id,
+          fromStart: owner.start,
+          fromEnd: owner.end,
+          toStart: event.start,
+          toEnd: event.end,
+        });
+      }
     }
   }
 
-  return { externals, moves };
+  return { externals, moves, retimes };
 }

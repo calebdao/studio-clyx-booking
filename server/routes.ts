@@ -24,6 +24,7 @@ import {
   sendConfirmationEmail,
   sendEntryInstructionsEmail,
   SPACE_LABELS,
+  computeBookingPricing,
   sendOwnerBookingAlert,
   startHoldExpirySweeper,
 } from "./integrations";
@@ -1591,6 +1592,70 @@ async function mergeGoogleCalendarBusy(
     } catch (e) {
       console.error(
         `[calendar-sync] failed to re-home ${move.bookingId} to ${move.toSpaceId}:`,
+        e
+      );
+    }
+  }
+
+  // Follow operator re-times. Unlike a space change this moves the price, so the
+  // old and new totals are logged — the operator collects any extension
+  // manually (Zelle), and for an already-charged card booking the difference has
+  // to be collected separately, which the log calls out explicitly.
+  for (const retime of plan.retimes) {
+    const idx = merged.findIndex((b) => b.id === retime.bookingId);
+    const before = idx !== -1 ? merged[idx] : null;
+    if (!before) continue;
+    try {
+      await storage.setBookingTime(
+        retime.bookingId,
+        retime.toStart,
+        retime.toEnd
+      );
+      const after: BookingDto = {
+        ...before,
+        start: retime.toStart,
+        end: retime.toEnd,
+      };
+      merged[idx] = after;
+
+      const oldTotal = computeBookingPricing(before).total;
+      const newTotal = computeBookingPricing(after).total;
+      const hrs = (s: string, e: string) =>
+        ((new Date(e).getTime() - new Date(s).getTime()) / 3_600_000).toFixed(2);
+      console.log(
+        `[calendar-sync] booking ${retime.bookingId} re-timed ` +
+          `${retime.fromStart} -> ${retime.toStart} / ${retime.fromEnd} -> ${retime.toEnd} ` +
+          `(${hrs(retime.fromStart, retime.fromEnd)}h -> ${hrs(retime.toStart, retime.toEnd)}h, ` +
+          `total $${oldTotal.toFixed(2)} -> $${newTotal.toFixed(2)})`
+      );
+      if (Math.abs(newTotal - oldTotal) >= 0.01) {
+        const verb = newTotal > oldTotal ? "COLLECT" : "REFUND";
+        console.warn(
+          `[calendar-sync] ${verb} $${Math.abs(newTotal - oldTotal).toFixed(2)} ` +
+            `for ${retime.bookingId} (${before.paymentMethod}${before.paidAt ? ", already charged" : ""}) ` +
+            `— price follows the calendar but no payment is taken automatically`
+        );
+      }
+
+      // Buffers were placed around the old slot; re-running moves them. It
+      // replaces its own tagged buffers rather than stacking new ones.
+      if (after.status === "confirmed") {
+        try {
+          await applyBookingBuffers(
+            after.spaceId,
+            new Date(after.start).getTime(),
+            new Date(after.end).getTime()
+          );
+        } catch (e) {
+          console.error(
+            `[calendar-sync] buffer refresh failed for ${retime.bookingId}:`,
+            e
+          );
+        }
+      }
+    } catch (e) {
+      console.error(
+        `[calendar-sync] failed to re-time ${retime.bookingId}:`,
         e
       );
     }

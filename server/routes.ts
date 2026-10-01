@@ -35,6 +35,7 @@ import {
   selectInstruction,
   type StudioKey,
 } from "./booking-instructions";
+import { planCalendarMerge, type SpaceEvents } from "./calendar-merge";
 import { applyBookingBuffers, removeBookingBuffers } from "./booking-buffers";
 import { startAddonReminderScheduler } from "./addon-reminders";
 import {
@@ -66,6 +67,7 @@ import {
 } from "./gmail-inbound";
 import {
   isCalendarLiveForSpace,
+  calendarIdForSpace,
   listEventsForSpace,
   SPACE_CALENDAR_ENV,
 } from "./google-calendar";
@@ -1525,45 +1527,74 @@ async function mergeGoogleCalendarBusy(
     now.getTime() + (BOOKING_WINDOW_MONTHS * 31 + 7) * 24 * 60 * 60 * 1000
   );
 
-  // Don't double-render our own hold/confirmed Google events: skip any event
-  // whose id matches a known internal booking's googleEventId.
-  const ownedEventIds = new Set(
-    internal
-      .map((b) => b.googleEventId)
-      .filter((x): x is string => Boolean(x))
+  // Fetch every live calendar, then let planCalendarMerge decide what each
+  // event means (ours / ours-but-moved / external). The rules live in
+  // server/calendar-merge.ts so they can be unit-tested directly.
+  const eventsBySpace: SpaceEvents[] = [];
+  await Promise.all(
+    spaceIds.filter(isCalendarLiveForSpace).map(async (spaceId) => {
+      const result = await listEventsForSpace(spaceId, windowStart, windowEnd);
+      if (!result.ok) return;
+      eventsBySpace.push({ spaceId, events: result.events });
+    })
   );
 
+  const plan = planCalendarMerge({ internal, eventsBySpace });
+
   const merged: BookingDto[] = [...internal];
-  await Promise.all(
-    spaceIds
-      .filter(isCalendarLiveForSpace)
-      .map(async (spaceId) => {
-        const result = await listEventsForSpace(spaceId, windowStart, windowEnd);
-        if (!result.ok) return;
-        for (const ev of result.events) {
-          if (ownedEventIds.has(ev.id)) continue;
-          merged.push({
-            id: `gcal-${ev.id}`,
-            spaceId,
-            activityId: "production",
-            start: ev.start,
-            end: ev.end,
-            status: "confirmed",
-            guest: {
-              firstName: ev.summary?.slice(0, 60) || "External",
-              lastName: "booking",
-              email: "calendar@google",
-            },
-            guestCount: 1,
-            alcohol: false,
-            addons: [],
-            paymentMethod: "zelle",
-            cardFeeAmount: 0,
-            createdAt: Date.now(),
-            source: "google",
-          });
-        }
-      })
-  );
+  for (const { spaceId, event } of plan.externals) {
+    merged.push({
+      id: `gcal-${event.id}`,
+      spaceId,
+      activityId: "production",
+      start: event.start,
+      end: event.end,
+      status: "confirmed",
+      guest: {
+        firstName: event.summary?.slice(0, 60) || "External",
+        lastName: "booking",
+        email: "calendar@google",
+      },
+      guestCount: 1,
+      alcohol: false,
+      addons: [],
+      paymentMethod: "zelle",
+      cardFeeAmount: 0,
+      createdAt: Date.now(),
+      source: "google",
+    });
+  }
+
+  // Reconcile operator moves: persist the new space, and patch this response in
+  // place so the change shows immediately rather than on the next poll.
+  // Self-limiting — once the row matches the calendar the event reads as
+  // "ours, where expected" and no further writes happen.
+  for (const move of plan.moves) {
+    const calendarId = calendarIdForSpace(move.toSpaceId);
+    try {
+      await storage.setBookingSpace(
+        move.bookingId,
+        move.toSpaceId,
+        calendarId ?? null
+      );
+      const idx = merged.findIndex((b) => b.id === move.bookingId);
+      if (idx !== -1) {
+        merged[idx] = {
+          ...merged[idx],
+          spaceId: move.toSpaceId,
+          googleCalendarId: calendarId ?? undefined,
+        };
+      }
+      console.log(
+        `[calendar-sync] booking ${move.bookingId} re-homed ${move.fromSpaceId} -> ${move.toSpaceId} (Google event moved by an operator)`
+      );
+    } catch (e) {
+      console.error(
+        `[calendar-sync] failed to re-home ${move.bookingId} to ${move.toSpaceId}:`,
+        e
+      );
+    }
+  }
+
   return merged;
 }

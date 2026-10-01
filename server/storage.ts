@@ -456,6 +456,11 @@ export interface IStorage {
     eventId: string | null,
     calendarId: string | null
   ): Promise<void>;
+  setBookingSpace(
+    id: string,
+    spaceId: BookingDto["spaceId"],
+    calendarId: string | null
+  ): Promise<void>;
   // Stripe
   setStripePaymentIntent(
     id: string,
@@ -818,6 +823,22 @@ export class DatabaseStorage implements IStorage {
   ) {
     db.update(bookings)
       .set({ googleEventId: eventId, googleCalendarId: calendarId })
+      .where(eq(bookings.id, id))
+      .run();
+  }
+
+  // Re-home a booking to a different space. Used when an operator drags the
+  // booking's Google Calendar event onto another studio's calendar: Google is
+  // treated as the source of truth for where the event now lives, and the row
+  // is reconciled to match (see mergeGoogleCalendarBusy). Space does not affect
+  // pricing — rates are per activity — so there is nothing to recompute.
+  async setBookingSpace(
+    id: string,
+    spaceId: BookingDto["spaceId"],
+    calendarId: string | null
+  ) {
+    db.update(bookings)
+      .set({ spaceId, googleCalendarId: calendarId })
       .where(eq(bookings.id, id))
       .run();
   }

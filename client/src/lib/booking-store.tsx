@@ -35,6 +35,8 @@ type BookingCtx = {
   confirmPaymentAsync: (id: string) => Promise<ConfirmResult>;
   releaseHoldAsync: (id: string) => Promise<void>;
   rejectBookingAsync: (id: string) => Promise<void>;
+  approveRequestAsync: (id: string) => Promise<void>;
+  declineRequestAsync: (id: string) => Promise<void>;
   createHoldPending: boolean;
   mutationPendingId: string | null;
 };
@@ -168,6 +170,36 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     },
   });
 
+  // Out-of-hours request decisions. Approve captures the card authorisation (or
+  // sends Zelle instructions); decline releases the authorisation and frees the
+  // slot. Both surface the server's message so an expired authorisation is
+  // visible rather than silent.
+  const approveMutation = useMutation({
+    mutationFn: async (id: string) => {
+      setMutationPendingId(id);
+      await apiRequest("POST", `/api/bookings/${id}/approve`, undefined, {
+        headers: { "x-admin-pin": adminPin ?? "" },
+      });
+    },
+    onSettled: () => {
+      setMutationPendingId(null);
+      invalidateBookings();
+    },
+  });
+
+  const declineMutation = useMutation({
+    mutationFn: async (id: string) => {
+      setMutationPendingId(id);
+      await apiRequest("POST", `/api/bookings/${id}/decline`, undefined, {
+        headers: { "x-admin-pin": adminPin ?? "" },
+      });
+    },
+    onSettled: () => {
+      setMutationPendingId(null);
+      invalidateBookings();
+    },
+  });
+
   const value = useMemo<BookingCtx>(
     () => ({
       bookings: query.data ?? [],
@@ -185,6 +217,12 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       rejectBookingAsync: async (id) => {
         await rejectMutation.mutateAsync(id);
       },
+      approveRequestAsync: async (id) => {
+        await approveMutation.mutateAsync(id);
+      },
+      declineRequestAsync: async (id) => {
+        await declineMutation.mutateAsync(id);
+      },
       createHoldPending: createHoldMutation.isPending,
       mutationPendingId,
     }),
@@ -197,6 +235,8 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       confirmMutation,
       releaseMutation,
       rejectMutation,
+      approveMutation,
+      declineMutation,
       mutationPendingId,
     ]
   );

@@ -7,6 +7,7 @@
 // RESEND_API_KEY + RESEND_FROM_ADDRESS are set.
 
 import type { BookingDto, SelectedAddOn } from "@shared/schema";
+import { STANDARD_HOURS_LABEL } from "@shared/business-hours";
 import {
   EVENT_CLEANING_FEE,
   ALCOHOL_FEE,
@@ -1254,4 +1255,292 @@ export function integrationsStatus() {
       defaultPinHint: process.env.ADMIN_PIN ? null : "0000 (default)",
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-hours booking requests.
+//
+// These sessions fall outside standard hours, so they can't confirm themselves.
+// The guest is told clearly that nothing is booked yet and that no money has
+// been taken — the single most important thing to get across, since otherwise a
+// card authorisation showing as pending on their statement reads like a charge.
+// ---------------------------------------------------------------------------
+
+function requestWhenLines(booking: BookingDto) {
+  const space = SPACE_LABELS[booking.spaceId] ?? booking.spaceId;
+  const activity = ACTIVITY_LABELS[booking.activityId];
+  const { durationHours, dateLabel, startLabel, endLabel } =
+    formatBookingTimes(booking);
+  return {
+    space,
+    activityLabel: activity?.name ?? booking.activityId,
+    dateLabel,
+    startLabel,
+    endLabel,
+    durationHours,
+  };
+}
+
+function requestShell(title: string, intro: string, bodyRows: string, tail: string) {
+  return `<!doctype html>
+<html><body style="margin:0;padding:0;background:#F7F6F2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#28251D;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F7F6F2;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;width:100%;background:#FBFBF9;border:1px solid #D4D1CA;border-radius:8px;">
+        <tr><td style="padding:28px;">
+          <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#01696F;font-weight:600;">Studio Clyx</div>
+          <h1 style="margin:6px 0 10px 0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">${title}</h1>
+          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.55;">${intro}</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;line-height:1.5;">
+            ${bodyRows}
+          </table>
+          ${tail}
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+}
+
+/** Guest acknowledgement: request received, nothing booked, nothing charged. */
+export async function sendRequestReceivedEmail(booking: BookingDto) {
+  const g = requestWhenLines(booking);
+  const guestName = booking.guest.firstName.trim() || "there";
+  const pricing = computeBookingPricing(booking);
+  const isCard = booking.paymentMethod === "card";
+
+  const moneyLine = isCard
+    ? `Your card has been authorised for $${pricing.total.toFixed(2)} but NOT charged. If we can't host this time, the authorisation is released and you pay nothing.`
+    : `No payment is needed yet. If we can host this time, we'll reply with payment details.`;
+
+  const subject = `Studio Clyx — request received (${g.dateLabel}, ${g.startLabel})`;
+  const text = [
+    `Hi ${guestName},`,
+    "",
+    `We've received your request — it isn't confirmed yet.`,
+    `This session falls outside our standard hours (${STANDARD_HOURS_LABEL}), so we review these by hand before confirming.`,
+    "",
+    `Space:    ${g.space}`,
+    `Activity: ${g.activityLabel}`,
+    `Date:     ${g.dateLabel}`,
+    `Time:     ${g.startLabel} – ${g.endLabel} (${g.durationHours} hour${g.durationHours === 1 ? "" : "s"})`,
+    `Request:  ${booking.id}`,
+    "",
+    moneyLine,
+    "",
+    `We'll come back to you as soon as we can. We hold the time for you in the meantime.`,
+    "",
+    `— Studio Clyx`,
+  ].join("\n");
+
+  const html = requestShell(
+    "We've got your request",
+    `Hi ${escapeHtml(guestName)}, this <strong>isn't confirmed yet</strong>. The time you picked is outside our standard hours (${escapeHtml(
+      STANDARD_HOURS_LABEL
+    )}), so we check these by hand first.`,
+    `${row("Space", g.space)}${row("Activity", g.activityLabel)}${row("Date", g.dateLabel)}${row(
+      "Time",
+      `${g.startLabel} – ${g.endLabel}`
+    )}${row("Request", booking.id, true)}`,
+    `<div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+       <p style="margin:0;font-size:14px;line-height:1.55;">${escapeHtml(moneyLine)}</p>
+       <p style="margin:10px 0 0 0;font-size:14px;line-height:1.55;color:#7A7974;">We're holding the time while we review.</p>
+     </div>`
+  );
+
+  return sendResendEmail({
+    to: booking.guest.email,
+    subject,
+    text,
+    html,
+    label: "request received",
+    bookingId: booking.id,
+  });
+}
+
+/** Zelle request accepted — now ask for payment. */
+export async function sendRequestApprovedEmail(booking: BookingDto) {
+  const g = requestWhenLines(booking);
+  const guestName = booking.guest.firstName.trim() || "there";
+  const pricing = computeBookingPricing(booking);
+  const subject = `Studio Clyx — your request is approved (${g.dateLabel}, ${g.startLabel})`;
+
+  const text = [
+    `Hi ${guestName},`,
+    "",
+    `Good news — we can host your session outside standard hours.`,
+    "",
+    `Space:    ${g.space}`,
+    `Date:     ${g.dateLabel}`,
+    `Time:     ${g.startLabel} – ${g.endLabel}`,
+    `Total:    $${pricing.total.toFixed(2)}`,
+    "",
+    `To lock it in, send payment by Zelle to ${ZELLE_RECIPIENT}.`,
+    `Please put ${booking.id} in the memo so we can match it.`,
+    `Payment confirmation usually takes ${PAYMENT_WINDOW_LABEL} once it arrives.`,
+    "",
+    `Your booking is confirmed once payment lands, and we'll email entry instructions then.`,
+    "",
+    `— Studio Clyx`,
+  ].join("\n");
+
+  const html = requestShell(
+    "Your request is approved",
+    `Hi ${escapeHtml(guestName)}, we can host this one. It's reserved for you — send payment to confirm it.`,
+    `${row("Space", g.space)}${row("Date", g.dateLabel)}${row(
+      "Time",
+      `${g.startLabel} – ${g.endLabel}`
+    )}${row("Total", `$${pricing.total.toFixed(2)}`)}`,
+    `<div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+       <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">Payment</div>
+       <p style="margin:8px 0 0 0;font-size:14px;line-height:1.55;">Zelle to <strong style="font-family:ui-monospace,Menlo,monospace;">${escapeHtml(
+         ZELLE_RECIPIENT
+       )}</strong>, with <strong style="font-family:ui-monospace,Menlo,monospace;">${escapeHtml(
+    booking.id
+  )}</strong> in the memo.</p>
+       <p style="margin:10px 0 0 0;font-size:14px;line-height:1.55;color:#7A7974;">We'll send entry instructions once payment is confirmed.</p>
+     </div>`
+  );
+
+  return sendResendEmail({
+    to: booking.guest.email,
+    subject,
+    text,
+    html,
+    label: "request approved",
+    bookingId: booking.id,
+  });
+}
+
+/** Request declined — make clear nothing was charged. */
+export async function sendRequestDeclinedEmail(booking: BookingDto) {
+  const g = requestWhenLines(booking);
+  const guestName = booking.guest.firstName.trim() || "there";
+  const released =
+    booking.paymentMethod === "card"
+      ? `Your card authorisation has been released — you have not been charged.`
+      : `No payment was taken.`;
+  const subject = `Studio Clyx — we can't host ${g.dateLabel}, ${g.startLabel}`;
+
+  const text = [
+    `Hi ${guestName},`,
+    "",
+    `Unfortunately we can't host your session on ${g.dateLabel} at ${g.startLabel} — it falls outside our standard hours (${STANDARD_HOURS_LABEL}) and we can't staff it this time.`,
+    "",
+    released,
+    "",
+    `Anything inside ${STANDARD_HOURS_LABEL} can be booked straight away on our site, and we'd love to host you then.`,
+    CANCELLATION_CONTACT_LINE,
+    "",
+    `— Studio Clyx`,
+  ].join("\n");
+
+  const html = requestShell(
+    "We can't host this one",
+    `Hi ${escapeHtml(guestName)}, sorry — we can't staff ${escapeHtml(
+      g.dateLabel
+    )} at ${escapeHtml(g.startLabel)}. It's outside our standard hours of ${escapeHtml(
+      STANDARD_HOURS_LABEL
+    )}.`,
+    `${row("Space", g.space)}${row("Date", g.dateLabel)}${row(
+      "Time",
+      `${g.startLabel} – ${g.endLabel}`
+    )}`,
+    `<div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+       <p style="margin:0;font-size:14px;line-height:1.55;"><strong>${escapeHtml(
+         released
+       )}</strong></p>
+       <p style="margin:10px 0 0 0;font-size:14px;line-height:1.55;">Anything inside ${escapeHtml(
+         STANDARD_HOURS_LABEL
+       )} can be booked instantly on our site.</p>
+       <p style="margin:10px 0 0 0;font-size:13px;line-height:1.55;color:#7A7974;">${escapeHtml(
+         CANCELLATION_CONTACT_LINE
+       )}</p>
+     </div>`
+  );
+
+  return sendResendEmail({
+    to: booking.guest.email,
+    subject,
+    text,
+    html,
+    label: "request declined",
+    bookingId: booking.id,
+  });
+}
+
+/** Owner alert for a request awaiting a decision. */
+export async function sendOwnerBookingRequestAlert(booking: BookingDto) {
+  const recipients = getOwnerAlertRecipients();
+  if (recipients.length === 0) {
+    console.log("[integrations] no OWNER_ALERT_EMAILS set; skipping request alert");
+    return { ok: true, mode: "simulation" as const, reason: "no recipients" };
+  }
+  const g = requestWhenLines(booking);
+  const pricing = computeBookingPricing(booking);
+  const guestName = `${booking.guest.firstName} ${booking.guest.lastName}`.trim();
+  const payLine =
+    booking.paymentMethod === "card"
+      ? `Card AUTHORISED (not charged). Approving captures $${pricing.total.toFixed(2)}; declining releases it. Capture within ~7 days of the authorisation.`
+      : `Zelle — payment instructions have NOT been sent. They go out only when you approve.`;
+
+  const subject = `ACTION: out-of-hours request — ${g.space}, ${g.dateLabel} ${g.startLabel}`;
+  const text = [
+    `An out-of-hours booking request needs your decision.`,
+    "",
+    `Guest:    ${guestName} (${booking.guest.email})`,
+    `Phone:    ${booking.guest.phone || "not provided"}`,
+    `Space:    ${g.space}`,
+    `Activity: ${g.activityLabel}`,
+    `Date:     ${g.dateLabel}`,
+    `Time:     ${g.startLabel} – ${g.endLabel} (${g.durationHours}h)`,
+    `Guests:   ${booking.guestCount}`,
+    `Total:    $${pricing.total.toFixed(2)}`,
+    `Request:  ${booking.id}`,
+    "",
+    booking.activityNote ? `What they're planning:\n${booking.activityNote}\n` : "",
+    payLine,
+    "",
+    `Approve or decline in the admin panel. The slot is held for 24 hours.`,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+
+  const html = requestShell(
+    "Out-of-hours request",
+    `<strong>${escapeHtml(guestName)}</strong> asked for a time outside standard hours. Nothing is confirmed and no money has moved.`,
+    `${row("Guest", guestName)}${row("Email", booking.guest.email)}${row(
+      "Phone",
+      booking.guest.phone || "not provided"
+    )}${row("Space", g.space)}${row("Activity", g.activityLabel)}${row("Date", g.dateLabel)}${row(
+      "Time",
+      `${g.startLabel} – ${g.endLabel}`
+    )}${row("Guests", String(booking.guestCount))}${row(
+      "Total",
+      `$${pricing.total.toFixed(2)}`
+    )}${row("Request", booking.id, true)}`,
+    `${
+      booking.activityNote
+        ? `<div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+             <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#7A7974;font-weight:600;">What they're planning</div>
+             <p style="margin:8px 0 0 0;font-size:14px;line-height:1.55;white-space:pre-wrap;">${escapeHtml(
+               booking.activityNote
+             )}</p>
+           </div>`
+        : ""
+    }
+     <div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+       <p style="margin:0;font-size:14px;line-height:1.55;">${escapeHtml(payLine)}</p>
+       <p style="margin:10px 0 0 0;font-size:14px;line-height:1.55;color:#7A7974;">Approve or decline in the admin panel. The slot is held for 24 hours.</p>
+     </div>`
+  );
+
+  return sendResendEmail({
+    to: recipients,
+    subject,
+    text,
+    html,
+    label: "out-of-hours request alert",
+    bookingId: booking.id,
+  });
 }

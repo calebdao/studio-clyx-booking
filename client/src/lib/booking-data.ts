@@ -89,6 +89,10 @@ export interface Booking {
   // For held bookings: epoch ms when the hold expires
   holdExpiresAt?: number;
   holdActive?: boolean;
+  // Out-of-hours booking: held but not confirmed until an operator accepts.
+  requiresApproval?: boolean;
+  approvedAt?: number;
+  cardAuthorizedAt?: number;
   reminderSentAt?: number;
   googleEventId?: string;
   googleCalendarId?: string;
@@ -708,12 +712,25 @@ export function bookingsToOccupiedSlots(
   return map;
 }
 
+// Standard-hours gate: anything outside these hours becomes an operator-approved
+// request rather than an instant booking. Re-exported from the shared module so
+// client and server can never disagree about the boundary.
+export {
+  requiresApprovalForWindow,
+  STANDARD_HOURS_LABEL,
+  STANDARD_HOURS_START_HOUR,
+  STANDARD_HOURS_END_HOUR,
+} from "@shared/business-hours";
+
 // ----- Night-hours notice -----
 // "Night hours" for the guest-facing heads-up: any time at/after 8 PM or before
 // 6 AM, New York time. Single source of truth for the definition — change these
 // to shift what counts as a night booking.
-export const NIGHT_START_HOUR = 20; // 8 PM ET
-export const NIGHT_END_HOUR = 6; // 6 AM ET
+// Kept aligned with the standard-hours gate: anything the gate turns into a
+// request is what deserves the heads-up. Previously 8 PM-6 AM, which now
+// contradicts the policy — 8 PM to midnight is ordinary business.
+export const NIGHT_START_HOUR = 24; // midnight ET (= STANDARD_HOURS_END_HOUR)
+export const NIGHT_END_HOUR = 8; // 8 AM ET (= STANDARD_HOURS_START_HOUR)
 
 // True when any 30-minute slot of [start, end) falls within night hours (NY
 // time). Drives the non-blocking "runs into night hours" notice in the summary.

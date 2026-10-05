@@ -224,6 +224,11 @@ export interface CardBookingDraft {
   addons: SelectedAddOn[];
   baseTotal: number; // dollars (no card fee), already promo-discounted
   promoCode?: string | null;
+  /**
+   * "manual" for out-of-hours REQUESTS: authorise only, capture on approval.
+   * Defaults to Stripe's automatic capture for normal pay-now bookings.
+   */
+  captureMethod?: "automatic" | "manual";
 }
 
 export interface CreateDraftPaymentIntentResult {
@@ -444,6 +449,7 @@ export async function createDraftPaymentIntent(
     const pi = await stripe.paymentIntents.create({
       amount: amountCents,
       currency: "usd",
+      capture_method: draft.captureMethod ?? "automatic",
       automatic_payment_methods: { enabled: true },
       description: `Studio Clyx booking draft (${draft.spaceId} · ${draft.activityId})`,
       receipt_email: draft.guest.email,
@@ -535,5 +541,141 @@ export async function refundPaymentIntent(
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`[stripe] refund failed for ${paymentIntentId}: ${msg}`);
     return { ok: false, error: msg };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Manual capture — used by out-of-hours REQUESTS.
+//
+// A request can't charge the guest up front, because the operator may decline
+// it. Charging and refunding would be worse than not charging: Stripe keeps the
+// processing fee on a refund, and a refund on the statement reads as though
+// something went wrong. So a request's PaymentIntent is created with
+// capture_method: "manual" — the card is authorised (money reserved, nothing
+// taken) and then either captured on approval or cancelled on decline.
+//
+// NOTE: an authorisation expires roughly 7 days after it is created, measured
+// from the authorisation and NOT from the session date. Capture has to happen
+// inside that window, which is why approval is expected within days and why the
+// admin list flags requests that have been sitting too long.
+// ---------------------------------------------------------------------------
+
+/** Capture an authorised PaymentIntent. Fires payment_intent.succeeded. */
+export async function capturePaymentIntent(
+  paymentIntentId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const stripe = getStripeClient();
+  if (!stripe) {
+    console.log(`[stripe] simulation: would capture ${paymentIntentId}`);
+    return { ok: true };
+  }
+  try {
+    const pi = await stripe.paymentIntents.capture(paymentIntentId);
+    console.log(`[stripe] captured ${pi.id} (status=${pi.status})`);
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[stripe] capture failed for ${paymentIntentId}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Release an authorisation without charging. Used when a request is declined.
+ * Nothing appears on the guest's statement beyond the pending auth dropping off.
+ */
+export async function cancelPaymentIntent(
+  paymentIntentId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const stripe = getStripeClient();
+  if (!stripe) {
+    console.log(`[stripe] simulation: would cancel ${paymentIntentId}`);
+    return { ok: true };
+  }
+  try {
+    const pi = await stripe.paymentIntents.cancel(paymentIntentId);
+    console.log(`[stripe] cancelled ${pi.id} (status=${pi.status})`);
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[stripe] cancel failed for ${paymentIntentId}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * PaymentIntent for an out-of-hours REQUEST against an already-created booking
+ * row. Authorise-only (manual capture), and tagged with `bookingId` rather than
+ * the draft payload — that routes the eventual payment_intent.succeeded (fired
+ * by our capture on approval) down the webhook's existing "PI against an
+ * existing booking" branch, which confirms the booking and runs the whole
+ * calendar / email / instructions / buffers chain.
+ */
+export async function createRequestPaymentIntent(args: {
+  bookingId: string;
+  spaceId: BookingDto["spaceId"];
+  activityId: BookingDto["activityId"];
+  guestEmail: string;
+  baseTotal: number;
+}): Promise<CreateDraftPaymentIntentResult> {
+  const cardFeeAmount = computeCardSurcharge(args.baseTotal);
+  const customerTotal =
+    Math.round((args.baseTotal + cardFeeAmount) * 100) / 100;
+  const amountCents = Math.round(customerTotal * 100);
+
+  const stripe = getStripeClient();
+  if (!stripe) {
+    console.log(
+      `[stripe] simulation: would authorise request PaymentIntent for ${args.bookingId} amount=$${customerTotal.toFixed(2)}`
+    );
+    return {
+      ok: true,
+      mode: "simulation",
+      reason: process.env.STRIPE_SECRET_KEY
+        ? _stripeInitError ?? "Stripe init failed"
+        : "STRIPE_SECRET_KEY missing",
+      baseTotal: args.baseTotal,
+      cardFeeAmount,
+      customerTotal,
+      paymentIntentId: `pi_sim_req_${Date.now()}`,
+      clientSecret: `pi_sim_req_${Date.now()}_secret_simulation`,
+      publishableKey: getStripePublishableKey() ?? undefined,
+    };
+  }
+
+  try {
+    const pi = await stripe.paymentIntents.create({
+      amount: amountCents,
+      currency: "usd",
+      capture_method: "manual",
+      automatic_payment_methods: { enabled: true },
+      description: `Studio Clyx booking request (${args.spaceId} · ${args.activityId})`,
+      receipt_email: args.guestEmail,
+      metadata: { bookingId: args.bookingId, studioClyxRequest: "1" },
+    });
+    console.log(
+      `[stripe] request PaymentIntent ${pi.id} authorised-only for booking ${args.bookingId} amount=$${customerTotal.toFixed(2)}`
+    );
+    return {
+      ok: true,
+      mode: "live",
+      clientSecret: pi.client_secret ?? undefined,
+      paymentIntentId: pi.id,
+      publishableKey: getStripePublishableKey() ?? undefined,
+      baseTotal: args.baseTotal,
+      cardFeeAmount,
+      customerTotal,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[stripe] request PaymentIntent create failed: ${msg}`);
+    return {
+      ok: false,
+      mode: "live",
+      error: msg,
+      baseTotal: args.baseTotal,
+      cardFeeAmount,
+      customerTotal,
+    };
   }
 }

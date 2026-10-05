@@ -45,6 +45,10 @@ import {
   isCalendarLiveForSpace,
   listEventsForSpace,
 } from "./google-calendar";
+import {
+  requiresApprovalForWindow,
+  REQUEST_HOLD_DURATION_MINUTES,
+} from "@shared/business-hours";
 
 // SQLite database file location.
 //
@@ -82,6 +86,9 @@ sqlite.exec(`
     addons TEXT,
     hold_expires_at INTEGER,
     hold_active INTEGER NOT NULL DEFAULT 1,
+    requires_approval INTEGER NOT NULL DEFAULT 0,
+    approved_at INTEGER,
+    card_authorized_at INTEGER,
     reminder_sent_at INTEGER,
     google_event_id TEXT,
     google_calendar_id TEXT,
@@ -227,6 +234,12 @@ ensureBookingColumn("activity_note", "activity_note TEXT");
 ensureBookingColumn("alcohol", "alcohol INTEGER NOT NULL DEFAULT 0");
 ensureBookingColumn("addons", "addons TEXT");
 ensureBookingColumn("hold_active", "hold_active INTEGER NOT NULL DEFAULT 1");
+ensureBookingColumn(
+  "requires_approval",
+  "requires_approval INTEGER NOT NULL DEFAULT 0"
+);
+ensureBookingColumn("approved_at", "approved_at INTEGER");
+ensureBookingColumn("card_authorized_at", "card_authorized_at INTEGER");
 ensureBookingColumn("reminder_sent_at", "reminder_sent_at INTEGER");
 ensureBookingColumn("google_event_id", "google_event_id TEXT");
 ensureBookingColumn("google_calendar_id", "google_calendar_id TEXT");
@@ -287,6 +300,9 @@ function rowToDto(r: BookingRow): BookingDto {
     addons: safeParseAddons(r.addons),
     holdExpiresAt: r.holdExpiresAt ?? undefined,
     holdActive: Boolean(r.holdActive),
+    requiresApproval: Boolean(r.requiresApproval),
+    approvedAt: r.approvedAt ?? undefined,
+    cardAuthorizedAt: r.cardAuthorizedAt ?? undefined,
     reminderSentAt: r.reminderSentAt ?? undefined,
     googleEventId: r.googleEventId ?? undefined,
     googleCalendarId: r.googleCalendarId ?? undefined,
@@ -462,6 +478,11 @@ export interface IStorage {
     calendarId: string | null
   ): Promise<void>;
   setBookingTime(id: string, start: string, end: string): Promise<void>;
+  setCardAuthorized(id: string, authorizedAt: number): Promise<void>;
+  markRequestApproved(
+    id: string,
+    approvedAt: number
+  ): Promise<BookingDto | undefined>;
   // Stripe
   setStripePaymentIntent(
     id: string,
@@ -711,6 +732,9 @@ export class DatabaseStorage implements IStorage {
 
     const id = `bkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const now = Date.now();
+    // Derived server-side, never taken from the client: a booking outside
+    // standard hours can't confirm itself regardless of what was posted.
+    const requiresApproval = requiresApprovalForWindow(input.start, input.end);
     const row: BookingRow = {
       id,
       spaceId: input.spaceId,
@@ -726,8 +750,21 @@ export class DatabaseStorage implements IStorage {
       activityNote: input.activityNote,
       alcohol: input.alcohol ?? false,
       addons: JSON.stringify(resolvedAddons),
-      holdExpiresAt: now + HOLD_DURATION_MINUTES * 60 * 1000,
+      // A request may sit until the operator is awake, so it holds its slot far
+      // longer than a payment hold — otherwise the hold lapses, the slot
+      // reopens, and the same time could be sold twice while the request is
+      // still waiting for a decision.
+      holdExpiresAt:
+        now +
+        (requiresApproval
+          ? REQUEST_HOLD_DURATION_MINUTES
+          : HOLD_DURATION_MINUTES) *
+          60 *
+          1000,
       holdActive: true,
+      requiresApproval,
+      approvedAt: null,
+      cardAuthorizedAt: null,
       reminderSentAt: null,
       googleEventId: null,
       googleCalendarId: null,
@@ -853,6 +890,26 @@ export class DatabaseStorage implements IStorage {
       .set({ start, end })
       .where(eq(bookings.id, id))
       .run();
+  }
+
+  // Stripe reported the card authorisation succeeded (manual capture). The money
+  // is reserved but not taken; capture happens if the operator accepts.
+  async setCardAuthorized(id: string, authorizedAt: number) {
+    db.update(bookings)
+      .set({ cardAuthorizedAt: authorizedAt })
+      .where(eq(bookings.id, id))
+      .run();
+  }
+
+  // Operator accepted an out-of-hours request. For card this is immediately
+  // followed by a capture; for Zelle the guest is now asked to pay.
+  async markRequestApproved(id: string, approvedAt: number) {
+    db.update(bookings)
+      .set({ approvedAt })
+      .where(eq(bookings.id, id))
+      .run();
+    const row = db.select().from(bookings).where(eq(bookings.id, id)).get();
+    return row ? rowToDto(row) : undefined;
   }
 
   async setStripePaymentIntent(id: string, paymentIntentId: string | null) {
@@ -1037,6 +1094,13 @@ export class DatabaseStorage implements IStorage {
       addons: JSON.stringify(resolvedAddons),
       holdExpiresAt: null,
       holdActive: false,
+      // This path is only reached by the pay-now card flow, which never carries
+      // an approval gate. A card REQUEST already has its row (created when the
+      // request was made), so it returns via the PaymentIntent idempotency check
+      // above rather than inserting here.
+      requiresApproval: false,
+      approvedAt: null,
+      cardAuthorizedAt: null,
       reminderSentAt: null,
       googleEventId: null,
       googleCalendarId: null,

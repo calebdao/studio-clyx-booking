@@ -38,6 +38,15 @@ export const bookings = sqliteTable("bookings", {
   addons: text("addons"), // JSON-encoded SelectedAddOn[]
   holdExpiresAt: integer("hold_expires_at"), // epoch ms
   holdActive: integer("hold_active", { mode: "boolean" }).notNull().default(true),
+  // Outside standard hours this booking is a REQUEST: it holds the slot but
+  // can't confirm itself, and no money moves until an operator accepts.
+  requiresApproval: integer("requires_approval", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  approvedAt: integer("approved_at"), // epoch ms the operator accepted the request
+  // Card requests are authorised, not charged (Stripe capture_method: manual).
+  // Set when the authorisation succeeds; capture happens on approval.
+  cardAuthorizedAt: integer("card_authorized_at"),
   reminderSentAt: integer("reminder_sent_at"), // epoch ms when owner reminder was sent
   googleEventId: text("google_event_id"), // tentative or confirmed event id (last known)
   googleCalendarId: text("google_calendar_id"), // calendar the event lives on
@@ -372,6 +381,9 @@ export const bookingDtoSchema = z.object({
   addons: z.array(selectedAddOnSchema).default([]),
   holdExpiresAt: z.number().optional(),
   holdActive: z.boolean().optional(),
+  requiresApproval: z.boolean().optional(),
+  approvedAt: z.number().optional(),
+  cardAuthorizedAt: z.number().optional(),
   reminderSentAt: z.number().optional(),
   googleEventId: z.string().optional(),
   googleCalendarId: z.string().optional(),

@@ -9,6 +9,8 @@ import {
 import {
   ACTIVITIES,
   ACTIVITY_NOTE_MAX,
+  requiresApprovalForWindow,
+  STANDARD_HOURS_LABEL,
   ACTIVITY_NOTE_MIN,
   ActivityId,
   AddOnCatalogItem,
@@ -190,6 +192,20 @@ export default function BookPage() {
         ? evaluatePromo(appliedPromo, selection.start.toISOString(), activityId)
         : null,
     [appliedPromo, selection]
+  );
+
+  // Outside standard hours this isn't an instant booking — it's a request the
+  // operator accepts or declines, and no money moves until they do. Mirrors the
+  // server's own check, which is authoritative.
+  const isRequest = useMemo(
+    () =>
+      isComplete && selection
+        ? requiresApprovalForWindow(
+            selection.start.toISOString(),
+            selection.end.toISOString()
+          )
+        : false,
+    [isComplete, selection]
   );
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -1079,6 +1095,20 @@ export default function BookPage() {
                 </span>
               </label>
 
+              {isRequest && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-[11px] leading-relaxed text-amber-800 dark:text-amber-200"
+                  data-testid="notice-approval-request"
+                >
+                  <span className="font-semibold">This time needs our approval.</span>{" "}
+                  Standard hours are {STANDARD_HOURS_LABEL}. We'll hold this slot and
+                  reply as soon as we can
+                  {paymentMethod === "card"
+                    ? " — your card is authorised but not charged until we accept."
+                    : " — no payment needed until we accept."}
+                </div>
+              )}
+
               <Button
                 size="lg"
                 className="w-full text-sm"
@@ -1089,7 +1119,13 @@ export default function BookPage() {
                 disabled={createHoldPending}
                 data-testid="button-book-now"
               >
-                {createHoldPending ? "Placing hold…" : "Book now"}
+                {createHoldPending
+                  ? isRequest
+                    ? "Sending request…"
+                    : "Placing hold…"
+                  : isRequest
+                  ? "Request this time"
+                  : "Book now"}
                 <ArrowRight className="w-4 h-4 ml-1.5" />
               </Button>
               {attemptedBook && missingRequired.length > 0 && (
@@ -1272,17 +1308,40 @@ export default function BookPage() {
         <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" data-testid="dialog-confirm">
           <DialogHeader>
             <div className="text-eyebrow text-primary mb-1.5">
-              {heldBooking?.paymentMethod === "card"
+              {heldBooking?.requiresApproval
+                ? "Awaiting our approval"
+                : heldBooking?.paymentMethod === "card"
                 ? "One step left"
                 : "Hold confirmed"}
             </div>
             <DialogTitle className="tracking-tight">
-              {heldBooking?.paymentMethod === "card"
+              {heldBooking?.requiresApproval
+                ? heldBooking?.paymentMethod === "card"
+                  ? "Authorise your card to submit this request"
+                  : "Request submitted — we'll be in touch"
+                : heldBooking?.paymentMethod === "card"
                 ? "Pay by card to confirm your booking"
                 : "Send payment via Zelle to lock in your booking"}
             </DialogTitle>
             <DialogDescription className="leading-relaxed pt-1">
-              {heldBooking?.paymentMethod === "card" ? (
+              {heldBooking?.requiresApproval ? (
+                heldBooking?.paymentMethod === "card" ? (
+                  <>
+                    This time is outside our standard hours ({STANDARD_HOURS_LABEL}),
+                    so we review it by hand. Enter your card to submit the request —
+                    it's <strong>authorised, not charged</strong>. We only take
+                    payment if we accept, and if we can't host it the authorisation
+                    is released.
+                  </>
+                ) : (
+                  <>
+                    This time is outside our standard hours ({STANDARD_HOURS_LABEL}),
+                    so we review it by hand. <strong>Nothing is booked yet and no
+                    payment is needed.</strong> We're holding the slot, and if we can
+                    host it we'll email you payment details.
+                  </>
+                )
+              ) : heldBooking?.paymentMethod === "card" ? (
                 <>
                   Enter your card details below. Your booking is confirmed the
                   moment the payment clears, and you'll receive a confirmation
@@ -1400,6 +1459,17 @@ export default function BookPage() {
                 )
               )}
             </div>
+          ) : heldBooking?.requiresApproval ? (
+            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-4">
+              <div className="text-eyebrow text-amber-800 dark:text-amber-200 mb-2">
+                No payment yet
+              </div>
+              <p className="text-xs leading-relaxed text-amber-900 dark:text-amber-100">
+                Don't send anything yet. If we can host this time we'll email you
+                payment details, and your booking is confirmed once payment lands.
+                We're holding the slot while we review.
+              </p>
+            </div>
           ) : (
             <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-4">
               <div className="text-eyebrow text-primary mb-2">Zelle payment</div>
@@ -1423,7 +1493,9 @@ export default function BookPage() {
 
           {/* Hold timer — only for Zelle. Card payments are instant so a
               countdown would be misleading. */}
-          {heldBooking?.paymentMethod !== "card" && heldBooking?.holdExpiresAt && (
+          {heldBooking?.paymentMethod !== "card" &&
+            !heldBooking?.requiresApproval &&
+            heldBooking?.holdExpiresAt && (
             <div className="mt-2 flex items-center justify-between text-xs px-1">
               <span className="text-muted-foreground">Hold expires in</span>
               <span className="font-mono tabular-nums" data-testid="text-hold-timer">

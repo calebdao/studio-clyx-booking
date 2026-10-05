@@ -142,6 +142,8 @@ function AdminConsole() {
     confirmPaymentAsync,
     releaseHoldAsync,
     rejectBookingAsync,
+    approveRequestAsync,
+    declineRequestAsync,
     now,
     mutationPendingId,
   } = useBookings();
@@ -210,6 +212,44 @@ function AdminConsole() {
       const msg = err instanceof Error ? err.message : "Could not release hold.";
       toast({
         title: "Could not release hold",
+        description: msg.replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function doApprove(id: string) {
+    try {
+      await approveRequestAsync(id);
+      toast({
+        title: "Request approved",
+        description:
+          "Card requests are charged now; Zelle guests have been emailed payment details.",
+      });
+    } catch (err) {
+      // Most likely cause is a lapsed card authorisation (~7 days), so show the
+      // server's message rather than a generic failure.
+      const msg = err instanceof Error ? err.message : "Could not approve request.";
+      toast({
+        title: "Could not approve request",
+        description: msg.replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function doDecline(id: string) {
+    try {
+      await declineRequestAsync(id);
+      toast({
+        title: "Request declined",
+        description:
+          "Slot released, card authorisation cancelled, and the guest has been told.",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not decline request.";
+      toast({
+        title: "Could not decline request",
         description: msg.replace(/^\d+:\s*/, ""),
         variant: "destructive",
       });
@@ -319,6 +359,35 @@ function AdminConsole() {
                 booking={b}
                 now={now}
                 actions={
+                  b.requiresApproval && !b.approvedAt ? (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => doApprove(b.id)}
+                        disabled={mutationPendingId === b.id}
+                        data-testid={`button-approve-${b.id}`}
+                      >
+                        {mutationPendingId === b.id ? (
+                          <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                        )}
+                        {b.paymentMethod === "card"
+                          ? "Approve & charge card"
+                          : "Approve & request payment"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => doDecline(b.id)}
+                        disabled={mutationPendingId === b.id}
+                        data-testid={`button-decline-${b.id}`}
+                      >
+                        <ShieldX className="w-3.5 h-3.5 mr-1.5" />
+                        Decline
+                      </Button>
+                    </>
+                  ) : (
                   <>
                     <Button
                       size="sm"
@@ -353,6 +422,7 @@ function AdminConsole() {
                       Release
                     </Button>
                   </>
+                  )
                 }
               />
             ))
@@ -800,7 +870,25 @@ function BookingRow({
             hold expired
           </span>
         )}
-        {isPending && (
+        {/* An out-of-hours request reads differently from a payment hold: the
+            money hasn't moved and it's waiting on YOU, not on the guest. */}
+        {booking.requiresApproval && !booking.approvedAt && (
+          <span className="inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 font-mono text-[11px] border border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-300">
+            <AlertTriangle className="w-3 h-3" />
+            needs your approval
+          </span>
+        )}
+        {booking.requiresApproval && booking.cardAuthorizedAt && (
+          <span className="inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 font-mono text-[11px] border border-primary/30 bg-primary/5 text-primary">
+            card authorised · not charged
+          </span>
+        )}
+        {booking.requiresApproval && booking.approvedAt && booking.status !== "confirmed" && (
+          <span className="inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 font-mono text-[11px] border border-card-border bg-background/50 text-muted-foreground">
+            approved · awaiting payment
+          </span>
+        )}
+        {isPending && !booking.requiresApproval && (
           <span className="inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 font-mono text-[11px] border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400">
             <AlertTriangle className="w-3 h-3" />
             awaiting payment

@@ -25,6 +25,10 @@ import {
   sendEntryInstructionsEmail,
   SPACE_LABELS,
   computeBookingPricing,
+  sendOwnerBookingRequestAlert,
+  sendRequestReceivedEmail,
+  sendRequestApprovedEmail,
+  sendRequestDeclinedEmail,
   sendOwnerBookingAlert,
   startHoldExpirySweeper,
 } from "./integrations";
@@ -37,6 +41,11 @@ import {
   type StudioKey,
 } from "./booking-instructions";
 import { planCalendarMerge, type SpaceEvents } from "./calendar-merge";
+import type { CreateHoldInput } from "@shared/schema";
+import {
+  requiresApprovalForWindow,
+  STANDARD_HOURS_LABEL,
+} from "@shared/business-hours";
 import { applyBookingBuffers, removeBookingBuffers } from "./booking-buffers";
 import { startAddonReminderScheduler } from "./addon-reminders";
 import {
@@ -46,6 +55,9 @@ import {
   decodeDraftMetadata,
   getStripePublishableKey,
   refundPaymentIntent,
+  capturePaymentIntent,
+  cancelPaymentIntent,
+  createRequestPaymentIntent,
   stripeStatus,
 } from "./stripe";
 import { sendSlotTakenRefundEmail, sendOwnerCardBookingFailedAlert } from "./integrations";
@@ -542,6 +554,13 @@ export async function registerRoutes(
       validateBookingRules(start, end);
       await storage.expireHolds(Date.now());
 
+      // Out-of-hours sessions are REQUESTS: the slot is held but nothing
+      // confirms and no money moves until an operator accepts. Decided here,
+      // server-side, from the times alone — the client can't opt out of it.
+      if (requiresApprovalForWindow(input.start, input.end)) {
+        return await handleApprovalRequest(input, res);
+      }
+
       // Card path: do NOT create a booking row or a Google hold. Just create
       // a Stripe PaymentIntent with all the booking details in metadata. The
       // booking is materialized in the DB only when the webhook reports
@@ -828,6 +847,107 @@ export async function registerRoutes(
     if (released > 0) invalidateMergedBookings();
   }
 
+  // An out-of-hours booking request. Creates the booking row (pending,
+  // requiresApproval, 24h hold) and puts a tentative hold on the calendar so the
+  // slot can't be sold twice, then notifies. No money is taken either way:
+  //   - card  → authorise only; captured if the operator accepts, released if not
+  //   - zelle → payment instructions are withheld until the operator accepts,
+  //             because un-Zelling a declined request has to be done by hand
+  async function handleApprovalRequest(
+    input: CreateHoldInput,
+    res: Response
+  ): Promise<Response> {
+    const conflict = await previewBookingConflict(
+      input.spaceId,
+      input.start,
+      input.end,
+      input.guest.email
+    );
+    if (conflict) throw httpError(409, conflict);
+
+    const booking = await storage.createHold(input);
+    invalidateMergedBookings();
+
+    let stripeInfo: {
+      clientSecret?: string;
+      publishableKey?: string;
+      paymentIntentId?: string;
+      mode: "live" | "simulation";
+      baseTotal: number;
+      cardFeeAmount: number;
+      customerTotal: number;
+    } | null = null;
+    if (input.paymentMethod === "card") {
+      const resolvedAddons = await resolveAddonsForBooking(input.addons);
+      const baseTotal = computePreviewBaseTotal({
+        activityId: input.activityId,
+        start: input.start,
+        end: input.end,
+        guestCount: input.guestCount,
+        alcohol: input.alcohol,
+        addons: resolvedAddons,
+        promoCode: input.promoCode ?? null,
+      });
+      const pi = await createRequestPaymentIntent({
+        bookingId: booking.id,
+        spaceId: input.spaceId,
+        activityId: input.activityId,
+        guestEmail: input.guest.email,
+        baseTotal,
+      });
+      if (!pi.ok) {
+        // Don't leave a request the guest can't pay for: drop it so the slot
+        // frees up immediately and they can try again.
+        await storage.rejectBooking(booking.id);
+        invalidateMergedBookings();
+        return res
+          .status(502)
+          .json({ ok: false, error: pi.error ?? "Stripe error" });
+      }
+      if (pi.paymentIntentId) {
+        await storage.setStripePaymentIntent(booking.id, pi.paymentIntentId);
+      }
+      stripeInfo = {
+        clientSecret: pi.clientSecret,
+        publishableKey: pi.publishableKey,
+        paymentIntentId: pi.paymentIntentId,
+        mode: pi.mode,
+        baseTotal: pi.baseTotal,
+        cardFeeAmount: pi.cardFeeAmount,
+        customerTotal: pi.customerTotal,
+      };
+    }
+
+    try {
+      const cal = await pushHoldToCalendar(booking);
+      if (cal.ok && cal.mode === "live" && "eventId" in cal && "calendarId" in cal) {
+        await storage.setGoogleEvent(
+          booking.id,
+          cal.eventId as string,
+          cal.calendarId as string
+        );
+      }
+    } catch (e) {
+      console.error(`[request] calendar hold failed for ${booking.id}:`, e);
+    }
+
+    try {
+      await sendOwnerBookingRequestAlert(booking);
+    } catch (e) {
+      console.error(`[request] owner alert failed for ${booking.id}:`, e);
+    }
+    try {
+      await sendRequestReceivedEmail(booking);
+    } catch (e) {
+      console.error(`[request] guest ack failed for ${booking.id}:`, e);
+    }
+
+    const fresh = (await storage.getBooking(booking.id)) ?? booking;
+    return res
+      .status(201)
+      .json(stripeInfo ? { ...fresh, _stripe: stripeInfo } : fresh);
+  }
+
   async function runConfirmChain(bookingId: string) {
     const booking = await storage.confirmBooking(bookingId);
     if (!booking) throw httpError(404, "Booking not found.");
@@ -919,6 +1039,107 @@ export async function registerRoutes(
         }
       }
       res.json({ ok: true, booking });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ----- Out-of-hours request decisions -----
+
+  // Accept a request. Card: capture the authorisation — the resulting
+  // payment_intent.succeeded webhook confirms the booking through the normal
+  // chain (calendar, confirmation email, entry instructions, buffers). Zelle:
+  // mark it approved and NOW send the payment instructions we withheld.
+  app.post("/api/bookings/:id/approve", requireAdmin, async (req, res, next) => {
+    try {
+      const booking = await storage.getBooking(String(req.params.id));
+      if (!booking) throw httpError(404, "Booking not found.");
+      if (!booking.requiresApproval) {
+        throw httpError(400, "This booking doesn't need approval.");
+      }
+      if (booking.status === "confirmed") {
+        return res.json({ ok: true, booking, note: "Already confirmed." });
+      }
+      if (booking.status === "rejected") {
+        throw httpError(400, "This request was already declined.");
+      }
+
+      const approved = await storage.markRequestApproved(booking.id, Date.now());
+      invalidateMergedBookings();
+
+      if (booking.paymentMethod === "card") {
+        if (!booking.stripePaymentIntentId) {
+          throw httpError(
+            409,
+            "No card authorisation on this request — ask the guest to re-enter their card."
+          );
+        }
+        const cap = await capturePaymentIntent(booking.stripePaymentIntentId);
+        if (!cap.ok) {
+          // Most likely the ~7-day authorisation window lapsed. Surface it
+          // rather than silently confirming an unpaid booking.
+          throw httpError(
+            502,
+            `Could not capture the card: ${cap.error ?? "unknown error"}. The authorisation may have expired — ask the guest to pay again.`
+          );
+        }
+        // The webhook finishes the job (confirm + emails + buffers).
+        return res.json({
+          ok: true,
+          booking: approved ?? booking,
+          captured: true,
+        });
+      }
+
+      try {
+        await sendRequestApprovedEmail(approved ?? booking);
+      } catch (e) {
+        console.error(`[request] approval email failed for ${booking.id}:`, e);
+      }
+      res.json({ ok: true, booking: approved ?? booking });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Decline a request: release the card authorisation (no charge, no refund),
+  // drop the calendar hold, free the slot, and tell the guest.
+  app.post("/api/bookings/:id/decline", requireAdmin, async (req, res, next) => {
+    try {
+      const booking = await storage.getBooking(String(req.params.id));
+      if (!booking) throw httpError(404, "Booking not found.");
+      if (booking.status === "confirmed") {
+        throw httpError(
+          400,
+          "This booking is already confirmed — cancel it instead of declining."
+        );
+      }
+      if (booking.paymentMethod === "card" && booking.stripePaymentIntentId) {
+        const cancelled = await cancelPaymentIntent(
+          booking.stripePaymentIntentId
+        );
+        if (!cancelled.ok) {
+          console.error(
+            `[request] could not cancel authorisation for ${booking.id}: ${cancelled.error}`
+          );
+        }
+      }
+      if (booking.googleEventId && booking.googleCalendarId) {
+        try {
+          await removeCalendarEvent(booking);
+          await storage.setGoogleEvent(booking.id, null, null);
+        } catch (e) {
+          console.error(`[request] calendar cleanup failed for ${booking.id}:`, e);
+        }
+      }
+      const rejected = await storage.rejectBooking(booking.id);
+      invalidateMergedBookings();
+      try {
+        await sendRequestDeclinedEmail(rejected ?? booking);
+      } catch (e) {
+        console.error(`[request] decline email failed for ${booking.id}:`, e);
+      }
+      res.json({ ok: true, booking: rejected ?? booking });
     } catch (e) {
       next(e);
     }
@@ -1291,6 +1512,32 @@ export async function registerRoutes(
           }
           break;
         }
+        // Manual-capture authorisation succeeded on an out-of-hours request: the
+        // card is reserved but NOT charged. Record it so the admin list can show
+        // "card authorised" and the operator knows approving will capture
+        // cleanly. Capture itself only happens when they accept.
+        case "payment_intent.amount_capturable_updated": {
+          const pi = event.data.object as {
+            id: string;
+            metadata?: Record<string, string>;
+          };
+          const bookingId =
+            pi.metadata?.bookingId ??
+            (await storage.findBookingByStripePaymentIntent(pi.id))?.id;
+          if (!bookingId) {
+            console.warn(
+              `[stripe] authorisation for PI ${pi.id} but no booking resolvable`
+            );
+            break;
+          }
+          await storage.setCardAuthorized(bookingId, Date.now());
+          invalidateMergedBookings();
+          console.log(
+            `[stripe] request ${bookingId} card authorised (PI ${pi.id}) — awaiting operator decision`
+          );
+          break;
+        }
+
         case "payment_intent.payment_failed": {
           const pi = event.data.object as {
             id: string;

@@ -45,6 +45,7 @@ import {
   isCalendarLiveForSpace,
   listEventsForSpace,
 } from "./google-calendar";
+import { bookingBlocksAvailability } from "@shared/availability";
 import {
   requiresApprovalForWindow,
   REQUEST_HOLD_DURATION_MINUTES,
@@ -987,9 +988,7 @@ export class DatabaseStorage implements IStorage {
     const existing = db.select().from(bookings).all();
     const overlapping = existing.filter((b) => {
       if (b.spaceId !== args.spaceId) return false;
-      if (b.status === "rejected") return false;
-      if ((b.status === "held" || b.status === "pending") && !b.holdActive)
-        return false;
+      if (!bookingBlocksAvailability(b)) return false;
       const bs = new Date(b.start).getTime();
       const be = new Date(b.end).getTime();
       return bs < end && be > start;

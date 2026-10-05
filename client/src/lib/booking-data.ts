@@ -693,6 +693,10 @@ export function bookingsToOccupiedSlots(
   const SLOT_MS = SLOT_MINUTES * 60 * 1000;
   for (const b of bookings) {
     if (b.spaceId !== spaceId) continue;
+    // A rejected booking or a lapsed hold leaves the slot free; drawing it would
+    // show guests a block that no longer exists. The public feed already filters
+    // these, so this is a second line of defence (and covers the admin view).
+    if (!bookingBlocksAvailability(b)) continue;
     const startMs = new Date(b.start).getTime();
     const endMs = new Date(b.end).getTime();
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
@@ -715,6 +719,8 @@ export function bookingsToOccupiedSlots(
 // Standard-hours gate: anything outside these hours becomes an operator-approved
 // request rather than an instant booking. Re-exported from the shared module so
 // client and server can never disagree about the boundary.
+import { bookingBlocksAvailability } from "@shared/availability";
+export { bookingBlocksAvailability };
 export {
   requiresApprovalForWindow,
   STANDARD_HOURS_LABEL,

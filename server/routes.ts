@@ -41,6 +41,7 @@ import {
   type StudioKey,
 } from "./booking-instructions";
 import { planCalendarMerge, type SpaceEvents } from "./calendar-merge";
+import { bookingBlocksAvailability } from "@shared/availability";
 import type { CreateHoldInput } from "@shared/schema";
 import {
   requiresApprovalForWindow,
@@ -297,9 +298,7 @@ async function previewBookingConflict(
 
   const overlapping = all.filter((b) => {
     if (b.spaceId !== spaceId) return false;
-    if (b.status === "rejected") return false;
-    if ((b.status === "held" || b.status === "pending") && !b.holdActive)
-      return false;
+    if (!bookingBlocksAvailability(b)) return false;
     const bs = new Date(b.start).getTime();
     const be = new Date(b.end).getTime();
     return bs < end && be > start;
@@ -514,7 +513,12 @@ export async function registerRoutes(
   app.get("/api/bookings", async (_req, res, next) => {
     try {
       const merged = await listMergedBookings();
-      res.json(merged.map(toPublicAvailability));
+      // Ship only what actually blocks a slot. Rejected bookings and lapsed
+      // holds stay in the database (the operator still needs to see them) but
+      // must never reach the guest scheduler, which draws everything it is given.
+      res.json(
+        merged.filter(bookingBlocksAvailability).map(toPublicAvailability)
+      );
     } catch (e) {
       next(e);
     }

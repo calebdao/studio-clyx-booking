@@ -1413,7 +1413,11 @@ export async function sendRequestApprovedEmail(booking: BookingDto) {
 }
 
 /** Request declined — make clear nothing was charged. */
-export async function sendRequestDeclinedEmail(booking: BookingDto) {
+export async function sendRequestDeclinedEmail(
+  booking: BookingDto,
+  /** Optional note from the operator, shown to the guest as written. */
+  reason?: string
+) {
   const g = requestWhenLines(booking);
   const guestName = booking.guest.firstName.trim() || "there";
   const released =
@@ -1425,7 +1429,13 @@ export async function sendRequestDeclinedEmail(booking: BookingDto) {
   const text = [
     `Hi ${guestName},`,
     "",
-    `Unfortunately we can't host your session on ${g.dateLabel} at ${g.startLabel} — it falls outside our standard hours (${STANDARD_HOURS_LABEL}) and we can't staff it this time.`,
+    // When the operator gives a reason, don't also assert the stock staffing
+    // explanation — the two can contradict each other ("we can't staff it" vs
+    // "the studio is being repainted").
+    reason
+      ? `Unfortunately we can't host your session on ${g.dateLabel} at ${g.startLabel}.`
+      : `Unfortunately we can't host your session on ${g.dateLabel} at ${g.startLabel} — it falls outside our standard hours (${STANDARD_HOURS_LABEL}) and we can't staff it this time.`,
+    ...(reason ? ["", reason] : []),
     "",
     released,
     "",
@@ -1437,16 +1447,29 @@ export async function sendRequestDeclinedEmail(booking: BookingDto) {
 
   const html = requestShell(
     "We can't host this one",
-    `Hi ${escapeHtml(guestName)}, sorry — we can't staff ${escapeHtml(
-      g.dateLabel
-    )} at ${escapeHtml(g.startLabel)}. It's outside our standard hours of ${escapeHtml(
-      STANDARD_HOURS_LABEL
-    )}.`,
+    reason
+      ? `Hi ${escapeHtml(guestName)}, sorry — we can't host ${escapeHtml(
+          g.dateLabel
+        )} at ${escapeHtml(g.startLabel)}.`
+      : `Hi ${escapeHtml(guestName)}, sorry — we can't staff ${escapeHtml(
+          g.dateLabel
+        )} at ${escapeHtml(g.startLabel)}. It's outside our standard hours of ${escapeHtml(
+          STANDARD_HOURS_LABEL
+        )}.`,
     `${row("Space", g.space)}${row("Date", g.dateLabel)}${row(
       "Time",
       `${g.startLabel} – ${g.endLabel}`
     )}`,
-    `<div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+    `${
+      reason
+        ? `<div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
+             <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(
+               reason
+             )}</p>
+           </div>`
+        : ""
+    }
+     <div style="border-top:1px solid #D4D1CA;margin-top:18px;padding-top:18px;">
        <p style="margin:0;font-size:14px;line-height:1.55;"><strong>${escapeHtml(
          released
        )}</strong></p>

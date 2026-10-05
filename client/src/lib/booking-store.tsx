@@ -36,7 +36,7 @@ type BookingCtx = {
   releaseHoldAsync: (id: string) => Promise<void>;
   rejectBookingAsync: (id: string) => Promise<void>;
   approveRequestAsync: (id: string) => Promise<void>;
-  declineRequestAsync: (id: string) => Promise<void>;
+  declineRequestAsync: (id: string, reason?: string) => Promise<void>;
   createHoldPending: boolean;
   mutationPendingId: string | null;
 };
@@ -188,11 +188,14 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
   });
 
   const declineMutation = useMutation({
-    mutationFn: async (id: string) => {
-      setMutationPendingId(id);
-      await apiRequest("POST", `/api/bookings/${id}/decline`, undefined, {
-        headers: { "x-admin-pin": adminPin ?? "" },
-      });
+    mutationFn: async (args: { id: string; reason?: string }) => {
+      setMutationPendingId(args.id);
+      await apiRequest(
+        "POST",
+        `/api/bookings/${args.id}/decline`,
+        args.reason ? { reason: args.reason } : undefined,
+        { headers: { "x-admin-pin": adminPin ?? "" } }
+      );
     },
     onSettled: () => {
       setMutationPendingId(null);
@@ -220,8 +223,8 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       approveRequestAsync: async (id) => {
         await approveMutation.mutateAsync(id);
       },
-      declineRequestAsync: async (id) => {
-        await declineMutation.mutateAsync(id);
+      declineRequestAsync: async (id, reason) => {
+        await declineMutation.mutateAsync({ id, reason });
       },
       createHoldPending: createHoldMutation.isPending,
       mutationPendingId,

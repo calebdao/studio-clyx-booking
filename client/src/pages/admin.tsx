@@ -155,6 +155,11 @@ function AdminConsole() {
   const { toast } = useToast();
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
+  // Declining an out-of-hours request opens a dialog so the operator can
+  // optionally tell the guest why — a bare "we can't host this" invites a
+  // reply asking why, which is a round trip neither side wants.
+  const [declineId, setDeclineId] = useState<string | null>(null);
+  const [declineReason, setDeclineReason] = useState("");
   const [emailToast, setEmailToast] = useState<{
     email: string;
     mode: "live" | "simulation";
@@ -238,13 +243,18 @@ function AdminConsole() {
     }
   }
 
-  async function doDecline(id: string) {
+  async function doDecline() {
+    if (!declineId) return;
+    const reason = declineReason.trim();
     try {
-      await declineRequestAsync(id);
+      await declineRequestAsync(declineId, reason || undefined);
+      setDeclineId(null);
+      setDeclineReason("");
       toast({
         title: "Request declined",
-        description:
-          "Slot released, card authorisation cancelled, and the guest has been told.",
+        description: reason
+          ? "Slot released, authorisation cancelled, and your note was emailed to the guest."
+          : "Slot released, card authorisation cancelled, and the guest has been told.",
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Could not decline request.";
@@ -276,6 +286,9 @@ function AdminConsole() {
   }
 
   const rejectTarget = rejectId ? bookings.find((b) => b.id === rejectId) : null;
+  const declineTarget = declineId
+    ? bookings.find((b) => b.id === declineId)
+    : null;
 
   return (
     <div className="max-w-[1280px] mx-auto px-5 lg:px-8 py-8 lg:py-12">
@@ -379,7 +392,10 @@ function AdminConsole() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => doDecline(b.id)}
+                        onClick={() => {
+                          setDeclineReason("");
+                          setDeclineId(b.id);
+                        }}
                         disabled={mutationPendingId === b.id}
                         data-testid={`button-decline-${b.id}`}
                       >
@@ -651,6 +667,102 @@ function AdminConsole() {
                 <ShieldX className="w-3.5 h-3.5 mr-1.5" />
               )}
               Reject booking
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Decline an out-of-hours request, with an optional note to the guest */}
+      <Dialog
+        open={!!declineId}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeclineId(null);
+            setDeclineReason("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md" data-testid="dialog-decline-request">
+          <DialogHeader>
+            <div className="text-eyebrow text-destructive mb-1.5">
+              Decline request
+            </div>
+            <DialogTitle className="tracking-tight">
+              Decline this out-of-hours request?
+            </DialogTitle>
+            <DialogDescription className="leading-relaxed">
+              {declineTarget?.paymentMethod === "card"
+                ? "The card authorisation is released — the guest is never charged — the slot frees up, and they're emailed."
+                : "The slot frees up and the guest is emailed. No payment was ever taken."}
+            </DialogDescription>
+          </DialogHeader>
+          {declineTarget && (
+            <div className="mt-2 rounded-md border border-card-border bg-background/40 divide-y divide-card-border text-sm">
+              <Row
+                label="Guest"
+                value={`${declineTarget.guest.firstName} ${declineTarget.guest.lastName}`}
+              />
+              <Row label="Email" value={declineTarget.guest.email} />
+              <Row label="Space" value={spaceById(declineTarget.spaceId).name} />
+              <Row
+                label="When"
+                value={
+                  <span className="font-mono text-xs tabular-nums">
+                    {fmtTime12(new Date(declineTarget.start))} →{" "}
+                    {fmtTime12(new Date(declineTarget.end))} ·{" "}
+                    {fmtDay(new Date(declineTarget.start))}
+                  </span>
+                }
+              />
+            </div>
+          )}
+          <div className="mt-3">
+            <Label className="text-xs font-medium mb-1.5 flex items-center gap-1.5">
+              <span>Reason for the guest</span>
+              <span className="text-muted-foreground text-[10px]">optional</span>
+            </Label>
+            <Textarea
+              value={declineReason}
+              onChange={(e) => setDeclineReason(e.target.value)}
+              rows={3}
+              maxLength={600}
+              placeholder="e.g. We can't staff a 6am start that week — happy to host you any time from 8am if that works."
+              className="resize-y min-h-[76px]"
+              data-testid="input-decline-reason"
+            />
+            <div className="mt-1.5 flex items-start justify-between gap-3">
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Included in the email exactly as written. Leave blank to send the
+                standard message.
+              </p>
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                {declineReason.trim().length}/600
+              </span>
+            </div>
+          </div>
+          <DialogFooter className="mt-3">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeclineId(null);
+                setDeclineReason("");
+              }}
+              data-testid="button-cancel-decline"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={doDecline}
+              disabled={!!declineTarget && mutationPendingId === declineTarget.id}
+              data-testid="button-confirm-decline"
+            >
+              {declineTarget && mutationPendingId === declineTarget.id ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <ShieldX className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Decline &amp; notify guest
             </Button>
           </DialogFooter>
         </DialogContent>

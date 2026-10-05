@@ -1134,8 +1134,18 @@ export async function registerRoutes(
       }
       const rejected = await storage.rejectBooking(booking.id);
       invalidateMergedBookings();
+      // Optional operator note, shown to the guest verbatim. Trimmed and capped
+      // so a stray paste can't bloat the email; blank means "no reason given"
+      // and the email simply omits that section.
+      const declineReason =
+        typeof req.body?.reason === "string"
+          ? req.body.reason.trim().slice(0, 600)
+          : "";
       try {
-        await sendRequestDeclinedEmail(rejected ?? booking);
+        await sendRequestDeclinedEmail(
+          rejected ?? booking,
+          declineReason || undefined
+        );
       } catch (e) {
         console.error(`[request] decline email failed for ${booking.id}:`, e);
       }

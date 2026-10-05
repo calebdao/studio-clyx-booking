@@ -155,6 +155,17 @@ function isOurBuffer(summary?: string): boolean {
   return Boolean(summary && summary.includes(BUFFER_TAG));
 }
 
+// A tentative "[HOLD] …" event from an unpaid booking (see eventBodyForBooking).
+// These are transient — they vanish when the hold is paid or expires — so they
+// must NOT be trimmed against. Buffers are computed once at confirm time and
+// never recomputed, so treating a 60-minute hold as a real occupant suppressed
+// the buffer permanently: a guest who held a slot, switched payment method and
+// rebooked an adjacent time left their own expiring hold sitting across the new
+// booking's buffer window, and the buffer was never created.
+export function isHoldEvent(summary?: string): boolean {
+  return Boolean(summary && /^\s*\[HOLD\]/i.test(summary));
+}
+
 const iso = (epoch: number) => new Date(epoch).toISOString();
 
 // Place trimmed buffer events around a booking; replace our own existing buffers
@@ -189,7 +200,11 @@ export async function applyBookingBuffers(
     s: new Date(e.start).getTime(),
     e: new Date(e.end).getTime(),
   }));
-  const real = events.filter((e) => !isOurBuffer(e.summary));
+  // Trim only against events that will still be there: real bookings, not our
+  // own buffers and not transient holds.
+  const real = events.filter(
+    (e) => !isOurBuffer(e.summary) && !isHoldEvent(e.summary)
+  );
   const ours = events.filter((e) => isOurBuffer(e.summary));
 
   // Trim pre-buffer [start-bm, start] up to the latest real event end inside it.

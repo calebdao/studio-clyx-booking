@@ -275,30 +275,51 @@ const ACTIVITY_RATE_USD: Record<string, number> = {
 async function previewBookingConflict(
   spaceId: BookingDto["spaceId"],
   startIso: string,
-  endIso: string
+  endIso: string,
+  /** When given, this guest's own unpaid holds don't count as conflicts. */
+  guestEmail?: string
 ): Promise<string | null> {
   const start = new Date(startIso).getTime();
   const end = new Date(endIso).getTime();
-  // Internal bookings
   const all = await storage.listBookings();
-  const blocker = all.find((b) => {
+
+  const overlapping = all.filter((b) => {
     if (b.spaceId !== spaceId) return false;
     if (b.status === "rejected") return false;
     if ((b.status === "held" || b.status === "pending") && !b.holdActive)
       return false;
-    if (b.source === "google") {
-      // already-known external event; surfaced from listBookings()
-    }
     const bs = new Date(b.start).getTime();
     const be = new Date(b.end).getTime();
     return bs < end && be > start;
   });
-  if (blocker) {
+
+  // A guest who placed a Zelle hold and then switched to card must not be
+  // blocked by their OWN unpaid hold. Without this they were told "this slot is
+  // no longer available" about a slot they themselves were holding — which
+  // reads as someone else having just taken it, and pushes them off the card
+  // path entirely.
+  const ownHolds = guestEmail
+    ? overlapping.filter(
+        (b) =>
+          (b.status === "held" || b.status === "pending") &&
+          b.guest.email.trim().toLowerCase() === guestEmail.trim().toLowerCase()
+      )
+    : [];
+  const ownHoldIds = new Set(ownHolds.map((b) => b.id));
+  if (overlapping.some((b) => !ownHoldIds.has(b.id))) {
     return "This slot is no longer available.";
   }
+
   // Google Calendar live check (will already be merged via listBookings, but
-  // double-check defensively in case of cache).
+  // double-check defensively in case of cache). The guest's own hold has a
+  // tentative [HOLD] event on that calendar, so exclude those event ids too —
+  // otherwise this check re-blocks exactly what we just forgave above.
   if (isCalendarLiveForSpace(spaceId)) {
+    const ownHoldEventIds = new Set(
+      ownHolds
+        .map((b) => b.googleEventId)
+        .filter((x): x is string => Boolean(x))
+    );
     const gc = await listEventsForSpace(
       spaceId,
       new Date(start),
@@ -306,6 +327,7 @@ async function previewBookingConflict(
     );
     if (gc.ok) {
       const ev = gc.events.find((e) => {
+        if (ownHoldEventIds.has(e.id)) return false;
         const bs = new Date(e.start).getTime();
         const be = new Date(e.end).getTime();
         return bs < end && be > start;
@@ -533,7 +555,8 @@ export async function registerRoutes(
         const conflictPreview = await previewBookingConflict(
           input.spaceId,
           input.start,
-          input.end
+          input.end,
+          input.guest.email
         );
         if (conflictPreview) {
           throw httpError(409, conflictPreview);
@@ -753,6 +776,56 @@ export async function registerRoutes(
     } catch (e) {
       console.error(`[direct-booking] entry-instructions error for ${booking.id}:`, e);
     }
+  }
+
+  // A guest who starts a Zelle hold, changes their mind and pays by card ends up
+  // owning two records for overlapping time: the unpaid hold and the paid
+  // booking. The hold can't be honoured — they can't occupy the room twice — and
+  // leaving it alive keeps the slot blocked and leaves a tentative [HOLD] event
+  // on the calendar. Retire it once the card payment lands.
+  //
+  // Only OVERLAPPING holds are retired. A hold at an unrelated time might be a
+  // genuine second booking in progress, so it's left to run its course.
+  async function releaseSupersededOwnHolds(booking: BookingDto): Promise<void> {
+    const email = booking.guest.email.trim().toLowerCase();
+    if (!email) return;
+    const start = new Date(booking.start).getTime();
+    const end = new Date(booking.end).getTime();
+    let released = 0;
+    try {
+      const all = await storage.listBookings();
+      for (const b of all) {
+        if (b.id === booking.id) continue;
+        if (b.spaceId !== booking.spaceId) continue;
+        if (b.status !== "held" && b.status !== "pending") continue;
+        if (b.holdActive === false) continue;
+        if (b.guest.email.trim().toLowerCase() !== email) continue;
+        const bs = new Date(b.start).getTime();
+        const be = new Date(b.end).getTime();
+        if (!(bs < end && be > start)) continue;
+        if (b.googleEventId && b.googleCalendarId) {
+          try {
+            await removeCalendarEvent(b);
+          } catch (e) {
+            console.error(
+              `[card] could not remove hold calendar event for ${b.id}:`,
+              e
+            );
+          }
+        }
+        await storage.rejectBooking(b.id);
+        released++;
+        console.log(
+          `[card] retired superseded own hold ${b.id} (${b.start}–${b.end}) after ${booking.id} was paid by card`
+        );
+      }
+    } catch (e) {
+      console.error(
+        `[card] releasing superseded holds failed for ${booking.id}:`,
+        e
+      );
+    }
+    if (released > 0) invalidateMergedBookings();
   }
 
   async function runConfirmChain(bookingId: string) {
@@ -1109,6 +1182,11 @@ export async function registerRoutes(
             // Successful materialization. Push to Google Calendar and send
             // the customer the regular confirmation email.
             const booking = result.booking;
+            // Retire the guest's own superseded Zelle hold FIRST, before
+            // buffers are placed below — its tentative [HOLD] event would
+            // otherwise look like a real occupant and suppress the buffer on
+            // that side permanently.
+            await releaseSupersededOwnHolds(booking);
             try {
               const calendar = await pushBookingToCalendar(booking);
               if (
@@ -1606,15 +1684,17 @@ async function mergeGoogleCalendarBusy(
     const before = idx !== -1 ? merged[idx] : null;
     if (!before) continue;
     try {
-      await storage.setBookingTime(
-        retime.bookingId,
-        retime.toStart,
-        retime.toEnd
-      );
+      // Normalise to the ...Z form every other row uses. Google returns
+      // offset-bearing strings ("2026-10-01T09:00:00-04:00"); storing those
+      // verbatim is the same instant but leaves one row in a different format
+      // from the other 129, which is confusing to read and to diff.
+      const toStart = new Date(retime.toStart).toISOString();
+      const toEnd = new Date(retime.toEnd).toISOString();
+      await storage.setBookingTime(retime.bookingId, toStart, toEnd);
       const after: BookingDto = {
         ...before,
-        start: retime.toStart,
-        end: retime.toEnd,
+        start: toStart,
+        end: toEnd,
       };
       merged[idx] = after;
 

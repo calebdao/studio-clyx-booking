@@ -928,7 +928,7 @@ export class DatabaseStorage implements IStorage {
       };
     }
     const existing = db.select().from(bookings).all();
-    const blocker = existing.find((b) => {
+    const overlapping = existing.filter((b) => {
       if (b.spaceId !== args.spaceId) return false;
       if (b.status === "rejected") return false;
       if ((b.status === "held" || b.status === "pending") && !b.holdActive)
@@ -937,6 +937,22 @@ export class DatabaseStorage implements IStorage {
       const be = new Date(b.end).getTime();
       return bs < end && be > start;
     });
+
+    // The guest's own unpaid hold must not block their own card payment. This
+    // MUST match the exemption in previewBookingConflict: the preview decides
+    // whether we take the money, this decides whether we keep it. If only the
+    // preview forgave the hold, a guest could pay and then be auto-refunded by
+    // this check — worse than refusing them up front.
+    const guestEmail = (args.guest.email ?? "").trim().toLowerCase();
+    const ownHolds = guestEmail
+      ? overlapping.filter(
+          (b) =>
+            (b.status === "held" || b.status === "pending") &&
+            (b.guestEmail ?? "").trim().toLowerCase() === guestEmail
+        )
+      : [];
+    const ownHoldIds = new Set(ownHolds.map((b) => b.id));
+    const blocker = overlapping.find((b) => !ownHoldIds.has(b.id));
     if (blocker) {
       return {
         ok: false,
@@ -947,6 +963,11 @@ export class DatabaseStorage implements IStorage {
 
     // Google Calendar conflict check (peerspace / giggster sync via shared cal).
     if (isCalendarLiveForSpace(args.spaceId)) {
+      const ownHoldEventIds = new Set(
+        ownHolds
+          .map((b) => b.googleEventId)
+          .filter((x): x is string => Boolean(x))
+      );
       const gc = await listEventsForSpace(
         args.spaceId,
         new Date(start),
@@ -954,6 +975,7 @@ export class DatabaseStorage implements IStorage {
       );
       if (gc.ok) {
         const gcBlocker = gc.events.find((ev) => {
+          if (ownHoldEventIds.has(ev.id)) return false;
           const bs = new Date(ev.start).getTime();
           const be = new Date(ev.end).getTime();
           return bs < end && be > start;
